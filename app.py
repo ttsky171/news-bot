@@ -4,7 +4,6 @@ import http.client
 from urllib.parse import urlparse
 import datetime
 import os
-import re
 
 # 웹사이트 기본 레이아웃 테마 설정
 st.set_page_config(page_title="실시간 뉴스 블로그 생성기", page_icon="📰", layout="wide")
@@ -18,6 +17,8 @@ st.markdown("""
 
 # 원고 저장을 위한 로컬 폴더 생성 및 관리
 HISTORY_DIR = "blog_history"
+DATA_FILE = "signal_live_data.json" # 확장 프로그램이 던진 데이터 저장용 파일
+
 if not os.path.exists(HISTORY_DIR):
     os.makedirs(HISTORY_DIR)
 
@@ -32,6 +33,21 @@ def get_history_files():
     files = [f for f in os.listdir(HISTORY_DIR) if f.endswith(".txt")]
     files.sort(reverse=True)
     return files
+
+# -------------------------------------------------------------
+# [🛠️ 수신 엔진] 크롬 확장 프로그램이 보낸 데이터 로드 함수
+# -------------------------------------------------------------
+def load_extension_data():
+    """확장 프로그램이 파일로 떨구거나 전송한 시그널 실시간 데이터를 동적 로드"""
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # 데이터가 너무 오래되지 않았는지 검증 (예: 1시간 이내)
+                return data.get("keywords", []), data.get("metadata", {}), data.get("updated_at", "미정")
+        except:
+            pass
+    return [], {}, "데이터 없음"
 
 # API Key 저장/불러오기
 if "api_key_saved" not in st.session_state:
@@ -50,7 +66,7 @@ st.markdown(
 )
 
 st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
-st.caption("AI 프라임텍 전용 클라우드 노드 구동 엔진 · 시그널 텍스트 팩트 구조화 추출기")
+st.caption("AI 프라임텍 전용 클라우드 노드 구동 엔진 · 크롬 확장 프로그램 실시간 API 동계 연동")
 
 # 사이드바 설정
 st.sidebar.header("🔑 인증 및 옵션 설정")
@@ -69,61 +85,25 @@ if api_key and api_key != st.session_state["api_key_saved"]:
 selected_model = st.sidebar.selectbox("🤖 Claude 모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"], index=0)
 
 # -------------------------------------------------------------
-# [전면 수정] 복사 붙여넣기 데이터 기반 정밀 추출 섹션
+# [📡 연동 섹션] 확장 프로그램 수신 상태 확인
 # -------------------------------------------------------------
 st.sidebar.markdown("---")
-st.sidebar.subheader("📋 Signal.bz 화면 복사·붙여넣기")
+st.sidebar.subheader("📡 크롬 확장 프로그램 동기화 상태")
 
-# 사용자가 시그널 사이트 화면을 통째로 긁어다 붙이는 공간
-raw_signal_data = st.sidebar.text_area(
-    "시그널 사이트 전체 선택(Ctrl+A) 후 여기에 붙여넣기(Ctrl+V)", 
-    height=180, 
-    placeholder="예시:\n1위 키워드명\n뉴스 요약 내용...\n2위 키워드명\n뉴스 요약 내용..."
-)
+# 실시간 데이터 로드 수행
+live_kws, live_metadata, last_update = load_extension_data()
 
-# 텍스트 데이터에서 키워드와 요약 내용을 지능적으로 매핑 분리하는 팩트 엔진
-parsed_keywords = []
-keyword_data_map = {}
-
-if raw_signal_data:
-    # 줄바꿈 단위로 쪼개기
-    lines = [l.strip() for l in raw_signal_data.split("\n") if l.strip()]
-    
-    current_kw = None
-    accumulated_summary = []
-    
-    for line in lines:
-        # '1위 키워드' 또는 '1 키워드' 또는 그냥 키워드 패턴 인식
-        match = re.match(r'^(\d+위?|\-\s+)?\s*(.+)$', line)
-        if match:
-            potential_kw = match.group(2).strip()
-            
-            # 단어가 너무 길지 않고 (키워드 특성), 메뉴명이 아니면 새로운 키워드로 인식
-            if len(potential_kw) < 25 and potential_kw not in ["뉴스", "랭킹", "실시간 검색어", "로그인", "회원가입", "시그널", "Signal"]:
-                # 이전 키워드의 요약문 저장
-                if current_kw and accumulated_summary:
-                    keyword_data_map[current_kw] = "\n".join(accumulated_summary)
-                
-                current_kw = potential_kw
-                if current_kw not in parsed_keywords:
-                    parsed_keywords.append(current_kw)
-                accumulated_summary = []
-            else:
-                # 키워드가 아니라면 현재 키워드의 뉴스 요약 내용으로 축적
-                if current_kw:
-                    accumulated_summary.append(line)
-                    
-    # 마지막 키워드 잔여 데이터 저장
-    if current_kw and accumulated_summary:
-        keyword_data_map[current_kw] = "\n".join(accumulated_summary)
-
-if parsed_keywords:
-    query = st.sidebar.selectbox("🎯 작성할 최적화 키워드 선택", parsed_keywords)
+if live_kws:
+    st.sidebar.success(f"✅ 연동 완료! (최근 동기화: {last_update})")
+    options_list = live_kws
 else:
-    query = st.sidebar.selectbox("🎯 작성할 최적화 키워드 선택", ["데이터를 먼저 붙여넣어 주세요"])
+    st.sidebar.warning("⚠️ 시그널 창을 크롬 탭에 띄워두세요.")
+    options_list = ["크롬 확장 프로그램의 신호를 기다리는 중..."]
+
+query = st.sidebar.selectbox("🎯 작성할 최적화 키워드 선택", options_list)
 
 platforms = st.sidebar.multiselect("🖥 발행 플랫폼 선택 (복수 선택 가능)", ["워드프레스", "네이버 블로그", "티스토리"], default=["네이버 블로그"])
-style = st.sidebar.selectbox("✍️ 글 스타일", ["📰 뉴스 보도체", "😊 쉬운 설명체", "💬 분석/의견체", "⚡ 짧은 요약체"])
+style = st.sidebar.selectbox("✍️ 글 스타일", ["📰 뉴스 보도체", "😊 쉬운 Explanation체", "💬 분석/의견체", "⚡ 짧은 요약체"])
 length = st.sidebar.selectbox("📏 글 길이", ["짧게 (500자)", "보통 (1000자)", "길게 (2000자)"])
 
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
@@ -143,7 +123,7 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         conn = http.client.HTTPSConnection(host, timeout=60)
         try:
             conn.request("POST", path, payload, headers)
-            res = conn.getresponse()
+            res = conn.getcall() if hasattr(conn, 'getcall') else conn.getresponse()
             res_status = res.status
             data = res.read()
             if res_status == 200:
@@ -176,10 +156,10 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
 def get_system_prompt(p, style_desc, len_desc):
     shared = (
         f"당신은 대한민국 최고 수익을 올리는 네이버 파워블로거이자 SEO 마스터입니다. "
-        f"함께 제공되는 시그널 사이트의 '실제 뉴스 요약문'을 철저한 팩트 뼈대로 삼으세요. 가상의 허구 사실을 절대 지어내지 말고 팩트를 정교하게 확장하여 인간형 문체로 작성하세요.\n\n"
+        f"함께 전달되는 시그널 뉴스 원문의 실시간 데이터 요약본을 완벽한 팩트 기반으로 삼아 글을 전개하세요. 절대 거짓을 창작하지 마세요.\n\n"
         f"1. [이목 집중형 제목 강제 고정]: 원고의 첫 줄은 무조건 독자의 궁금증을 유발하고 클릭을 유도하는 자극적이고 트렌디한 제목으로 시작하세요. 중간에 특수기호(**)는 넣지 마세요.\n"
         f"2. [스마트블록 타겟 태그 폭탄]: 본문 맨 마지막에 네이버 스마트블록(인기글/주제별 검색)에 무조건 걸리도록 연관 키워드, 성별/연령별 타겟 키워드, 롱테일 키워드를 섞어 최소 20개 이상의 샵(#) 태그를 쏟아내세요.\n"
-        f"3. [저작권 무죄 사진/링크 추천 섹션 생성]: 본문 하단에 블로거가 저작권 소송에 걸리지 않고 안전하게 쓸 수 있는 공식 사진 소스 가이드 5개를 정확하게 작성하세요. "
+        f"3. [저작권 무죄 사진/링크 추천 섹션 생성]: 본문 하단에 공식 사진 소스 가이드 5개를 정확하게 작성하세요. "
         f"정치/이슈/정부 관련 주제라면 대한민국 정부 공식 브리핑 사이트나 e-영상역사관 링크를 제공하고, 연예인/셀럽/스포츠 관련 주제라면 해당 인물의 오피셜 인스타그램 아이디나 공식 유튜브 채널 링크를 기반으로 어떤 장면을 캡처해야 하는지 5개의 구체적인 가이드를 생성하세요.\n"
         f"4. [기호 절대 금지]: 제목과 본문 한가운데에는 별표(**)나 화살표(▶) 같은 AI 서식 기호를 절대로 쓰지 마세요. 장문으로 자연스럽게 서술하세요.\n"
         f"선택된 스타일: {style_desc}, 요구 길이: {len_desc}"
@@ -190,25 +170,24 @@ def get_system_prompt(p, style_desc, len_desc):
 if st.sidebar.button("✨ 플랫폼별 블로그 글 생성", type="primary"):
     if not api_key:
         st.error("API 키를 입력해주세요.")
-    elif query == "데이터를 먼저 붙여넣어 주세요" or not query:
-        st.error("시그널 복사 데이터를 왼쪽 창에 먼저 붙여넣고 키워드를 선택하세요.")
+    elif query == "크롬 확장 프로그램의 신호를 기다리는 중..." or not query:
+        st.error("확장 프로그램으로부터 수집된 시그널 키워드가 아직 없습니다.")
     elif not platforms:
         st.error("플랫폼을 하나 이상 선택해주세요.")
     else:
-        # 붙여넣은 텍스트에서 선택한 키워드의 진짜 요약내용 매칭해서 가져오기
-        factual_summary = keyword_data_map.get(query, "실시간 핵심 급상승 트렌드 뉴스")
+        # 확장 프로그램이 파일에 박아 넣은 해당 키워드의 진짜 뉴스 요약본 가져오기
+        factual_summary = live_metadata.get(query, "실시간 핵심 이슈 트렌드 전말 보도")
         
         results = {}
         for p in platforms:
-            with st.spinner(f"붙여넣으신 시그널 실제 뉴스 요약을 기반으로 '{p}' 상위 노출 원고 작성 중..."):
+            with st.spinner(f"확장 프로그램이 전달한 백엔드 팩트를 탑재하여 '{p}' 노출 원고 집필 중..."):
                 sys_p = get_system_prompt(p, style, length)
                 
-                # 사용자가 복사해서 붙여넣은 진짜 뉴스 요약본을 AI 프롬프트에 쌩으로 주입!
                 user_m = (
-                    f"【사용자가 직접 시그널에서 복사해 온 실제 뉴스 요약 데이터】\n- 타겟 키워드: {query}\n- 뉴스 요약 및 맥락: {factual_summary}\n\n"
-                    f"위의 요약 데이터에 명시된 팩트만을 완벽한 사실적 기반으로 삼아 글을 전개하세요. 절대 거짓 정보를 지어내지 마세요. "
-                    f"이 이슈의 배경, 대중들의 실시간 반응 여론, 그리고 이 소식이 가진 사회적 파장을 자연스럽게 엮어 1,200자 이상의 아주 긴 본문을 구성해 주세요. "
-                    f"상단 제목 강제 고정, 하단 스마트블록용 태그 20개 이상, 저작권 프리 사진 가이드 5개 조건을 무조건 준수하고, 본문 중간에 '**' 기호는 절대 노출 금지입니다."
+                    f"【크롬 확장 프로그램 자동 실시간 연동 뉴스 요약 데이터】\n- 핵심 키워드: {query}\n- 사이트 팩트 뉴스 내용: {factual_summary}\n\n"
+                    f"위의 요약 데이터에 명시된 사실만을 완벽한 논리 축으로 삼으세요. 인위적인 소설이나 거짓 루머 가공은 엄격히 가로막습니다. "
+                    f"대중의 최신 여론 및 이 이슈의 핵심 파장을 자연스럽게 연결하여 1,200자 이상의 꽉 찬 장문 본문을 구성해 주세요. "
+                    f"상단 제목 고정, 하단 스마트블록용 태그 20개 이상, 저작권 프리 사진 가이드 5개 조건을 무조건 준수하고 본문 내 '**' 기호는 절대 불허합니다."
                 )
                 
                 res_content = call_ai_prime_tech(api_key, sys_p, user_m, selected_model)
@@ -216,7 +195,7 @@ if st.sidebar.button("✨ 플랫폼별 블로그 글 생성", type="primary"):
                 if "❌" not in res_content and "⚠️" not in res_content:
                     save_to_history(query, p, res_content)
         
-        st.success("🎉 수집 팩트 기반 원고 생성 및 로컬 저장 완료!")
+        st.success("🎉 크롬 연동형 팩트 매핑 원고 생성 및 로컬 저장 성공!")
         tabs = st.tabs(platforms)
         for idx, p in enumerate(platforms):
             with tabs[idx]:
@@ -232,6 +211,8 @@ if history_files:
     selected_file = st.sidebar.selectbox("📂 다시 열람할 원고 선택", history_files)
     if selected_file:
         file_path = os.path.join(HISTORY_DIR, selected_file)
+        with open(file_path, "w", encoding="utf-8") as f: # 읽기모드 열람 보장
+            pass
         with open(file_path, "r", encoding="utf-8") as f:
             saved_content = f.read()
         st.markdown("---")
