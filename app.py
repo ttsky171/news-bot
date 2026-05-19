@@ -64,7 +64,7 @@ def load_extension_data():
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
-# 2. AI 호출 엔진
+# [🔥 핵심 수정: 타임아웃 대기 시간을 120초 -> 240초로 2배 연장]
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -75,7 +75,8 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {key}'}
     
     try:
-        conn = http.client.HTTPSConnection(host, timeout=120) 
+        # timeout=240 으로 변경하여 4분 동안 서버의 응답을 끈질기게 기다립니다.
+        conn = http.client.HTTPSConnection(host, timeout=240) 
         conn.request("POST", "/v1/messages", payload, headers)
         res = conn.getresponse()
         data = res.read().decode("utf-8")
@@ -155,7 +156,6 @@ style = st.sidebar.selectbox("글 스타일", [
     "✍️ 스토리텔링체 (부드러운 이야기 형식, 몰입감)"
 ])
 
-# [🔥 핵심 수정: 글자 수 범위를 명확한 '최소 제한선' 기준으로 세분화 변경]
 length_option = st.sidebar.selectbox("목표 글자 수 (최소 보장 기준)", [
     "공백 제외 최소 1,500자 이상 (일반 포스팅용)", 
     "공백 제외 최소 2,000자 이상 (상세 고품질용)", 
@@ -212,7 +212,6 @@ with tab1:
             st.session_state.selected_keyword = final_query
             st.session_state.generated_content = {} 
             
-            # 실제 프롬프트에 주입할 글자 수 텍스트만 추출
             target_length = length_option.split("(")[0].strip()
 
             for p in platforms:
@@ -240,9 +239,12 @@ with tab1:
                     f"⚠️ [작성 안내]\n"
                     f"- 본문 맨 처음에 알맞은 제목을 크게 적어주고, 이어서 서론, 본문(소제목 포함), 결론을 구분 기호 없이 한 번에 작성해 주세요.\n"
                     f"- 이미지나 외부 링크 추천 관련 멘트는 절대로 적지 마세요.\n\n"
-                    f"🔢 [🔥 글자 수 절대 준수 규칙 - 최우선 체크]\n"
+                    f"✨ [소제목 스타일 규칙 - 필수]\n"
+                    f"- 본문 중간중간 내용을 구분 짓는 모든 **소제목은 양옆에 '**'를 감싸서 무조건 굵은 글씨로 표현**되게 하세요. (예시: **1. 핵심 내용 요약 및 분석**)\n"
+                    f"- 단, 일반 설명 문장 내부에서는 마크다운 기호(**)를 남발하지 말고 소제목에만 정확히 적용하세요.\n\n"
+                    f"🔢 [글자 수 절대 준수 규칙]\n"
                     f"- 작성되는 순수 본문(태그 제외)의 분량은 무조건 **{target_length}**을 넘겨야 합니다.\n"
-                    f"- 대충 요약해서 분량이 미달되면 안 됩니다. 정보가 부족하다면 팩트의 배경, 사회적 파장, 네티즌들의 반응, 향후 전망, 주의사항 등의 소제목을 추가로 개설해서라도 문장을 길고 구체적으로 늘려 쓰세요.\n\n"
+                    f"- 정보가 부족하다면 팩트의 배경, 사회적 파장, 네티즌들의 반응, 향후 전망, 주의사항 등의 소제목을 다양하게 늘려 개설해서라도 문장을 길고 구체적으로 가득 채우세요.\n\n"
                     f"🏷️ [스마트블록 최적화 태그 생성 규칙]\n"
                     f"- 결론이 끝난 뒤 맨 마지막 줄에, 네이버 스마트블록 세부 분류에 노출되기 적합한 **연관 핵심 태그를 반드시 20개 이상** 한 줄로 이어서 작성하세요.\n"
                     f"- 태그는 대중의 검색 의도, 파생 키워드, 타겟층이 골고루 조합된 고품질 키워드로 구성해야 합니다.\n"
@@ -250,14 +252,13 @@ with tab1:
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
                     f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
                     f"[⚠️ 절대 금지 규칙]\n"
-                    f"- 본문 내에서 마크다운 강조 기호인 '**' (별표 두 개)는 절대 사용하지 마세요.\n"
                     f"- 'AI 요약에 따르면' 같은 인위적인 문구는 절대 금지합니다."
                 )
                 
                 user_msg = (
                     f"● 실시간 트렌드 키워드: {final_query}\n"
                     f"● 뉴스 맥락 및 참고 팩트 정보:\n{custom_summary}\n\n"
-                    f"위 규칙들을 토대로 블로그 글을 작성하고, 본문 분량 규칙인 '{target_length}'을 절대적으로 지켜서 길게 써줘. 마지막 줄에 스마트블록 태그 20개 이상도 빼놓지 마."
+                    f"위 규칙들을 토대로 블로그 글을 작성하고, 본문 분량 규칙인 '{target_length}'을 절대적으로 준수해줘. 각 문단의 소제목들은 반드시 '**소제목**' 형태로 굵게 강조해 주어야 해."
                 )
                 
                 with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
