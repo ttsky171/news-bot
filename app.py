@@ -64,7 +64,7 @@ def load_extension_data():
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
-# 2. AI 호출 엔진
+# [🔥 2. AI 호출 엔진 만능 파싱 구조로 전면 개편]
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -82,12 +82,38 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         conn.close()
         
         result_json = json.loads(data)
-        if "content" in result_json and len(result_json["content"]) > 0:
-            return result_json["content"][0].get("text", "본문 텍스트가 비어있습니다.")
-        elif "error" in result_json:
+        
+        # 구조 분석 1단계: 표준적이고 깊은 구조 형태 파싱 (기존 방식 보완)
+        if "content" in result_json:
+            content_data = result_json["content"]
+            if isinstance(content_data, list) and len(content_data) > 0:
+                if isinstance(content_data[0], dict) and "text" in content_data[0]:
+                    return content_data[0]["text"]
+                elif isinstance(content_data[0], str):
+                    return content_data[0]
+            elif isinstance(content_data, str):
+                return content_data
+        
+        # 구조 분석 2단계: OpenAI 스타일 또는 일반적인 text/choices 형태 파싱 백업
+        if "choices" in result_json and len(result_json["choices"]) > 0:
+            choice = result_json["choices"][0]
+            if "message" in choice and "content" in choice["message"]:
+                return choice["message"]["content"]
+            elif "text" in choice:
+                return choice["text"]
+                
+        if "text" in result_json:
+            return result_json["text"]
+            
+        if "error" in result_json:
             return f"AI API 에러 발생: {result_json['error']}"
-        else:
-            return f"알 수 없는 응답 형식: {data}"
+            
+        # 구조 분석 3단계 (최후의 보루): 어떻게든 데이터가 왔다면 JSON 문자열 전체라도 화면에 덤프
+        if data.strip():
+            return f"⚠️ [안내: 규격 외 응답 수신] 데이터 원본을 출력합니다:\n\n{data}"
+            
+        return "본문 텍스트가 비어있습니다. (서버가 빈 값을 반환함)"
+        
     except Exception as e:
         return f"통신 장애 발생: {str(e)}"
 
@@ -123,7 +149,6 @@ style = st.sidebar.selectbox("글 스타일", [
     "✍️ 스토리텔링체 (부드러운 이야기 형식, 몰입감)"
 ])
 
-# [💡 핵심 수정] 요구사항에 맞춰 글자 수 옵션 전면 개편
 length_option = st.sidebar.selectbox("목표 글자 수", [
     "공백 제외 1,500자 내외 (기본 분량)", 
     "공백 제외 2,000자 내외 (상세한 포스팅)", 
@@ -183,9 +208,9 @@ with tab1:
             for p in platforms:
                 tone_instruction = ""
                 if "뉴스 보도체" in style:
-                    tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조(~다, ~합니다)로 작성하세요. 주관적 감정은 배제하고 팩트 전달에 집중하세요."
+                    tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조 (~다, ~합니다)로 작성하세요. 주관적 감정은 배제하고 팩트 전달에 집중하세요."
                 elif "쉬운 설명체" in style:
-                    tone_instruction = "친근한 블로그 어조(~에요, ~습니다)로 작성하세요. 독자가 이해하기 쉽게 비유를 쓰고 적절한 이모지를 활용하세요."
+                    tone_instruction = "친근한 블로그 어조 (~에요, ~습니다)로 작성하세요. 독자가 이해하기 쉽게 비유를 쓰고 적절한 이모지를 활용하세요."
                 elif "이슈 분석체" in style:
                     tone_instruction = "날카로운 평론가/전문가 어조로 작성하세요. 사건의 배경, 원인, 향후 미칠 파장이나 전망까지 입체적으로 분석해야 합니다."
                 elif "스토리텔링체" in style:
