@@ -47,14 +47,19 @@ def load_extension_data():
         req = urllib.request.Request(url, headers={"X-Master-Key": MASTER_KEY})
         with urllib.request.urlopen(req, timeout=10) as response:
             res_data = json.loads(response.read().decode("utf-8"))
-            actual_data = res_data.get("record", {})
+            # 디버깅용: 데이터를 그대로 화면에 찍어보자 (나중에 지워도 됨)
+            print("우체통에서 읽은 데이터:", res_data) 
+            
+            # record가 있으면 꺼내고, 없으면 전체 데이터를 사용
+            actual_data = res_data.get("record", res_data)
+            
             return (
-                actual_data.get("keywords", []), 
+                actual_data.get("keywords", ["데이터가", "없음"]), 
                 actual_data.get("metadata", {}), 
-                actual_data.get("updated_at", "최근 동기화됨")
+                actual_data.get("updated_at", "동기화 실패")
             )
     except Exception as e:
-        return [], {}, "데이터 연동 대기 중"
+        return ["에러발생", str(e)], {}, "연결 오류"
 
 # API Key 저장/불러오기
 if "api_key_saved" not in st.session_state:
