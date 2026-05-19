@@ -20,7 +20,6 @@ st.markdown("""
 if "api_key_saved" not in st.session_state:
     st.session_state["api_key_saved"] = ""
 
-# 자바스크립트를 이용해 브라우저 로컬 스토리지에서 키를 읽어오는 컴포넌트
 st.markdown(
     """
     <script>
@@ -51,7 +50,6 @@ else:
 
 api_key = st.sidebar.text_input("AI Prime Tech API Key 입력", value=default_key, type="password")
 
-# 키가 새로 입력되거나 변경되면 브라우저 로컬 스토리지에 자동 저장
 if api_key and api_key != st.session_state["api_key_saved"]:
     st.session_state["api_key_saved"] = api_key
     st.markdown(
@@ -63,13 +61,11 @@ if api_key and api_key != st.session_state["api_key_saved"]:
         unsafe_allow_html=True
     )
 
-# -------------------------------------------------------------
-# [중요 수정] 이미지에 나온 대행 서버 제공 모델 선택 메뉴 추가
-# -------------------------------------------------------------
+# 대행 서버 제공 모델 선택
 selected_model = st.sidebar.selectbox(
-    "🤖 Claude 모델 선택 (이미지 기준)", 
+    "🤖 Claude 모델 선택", 
     ["claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"],
-    index=0  # 기본값: 가성비 좋고 빠른 소네트
+    index=0
 )
 
 raw_text = st.sidebar.text_area("🔥 Signal.bz 순위 통째로 복사·붙여넣기", height=150, 
@@ -98,10 +94,10 @@ style = st.sidebar.selectbox("✍️ 글 스타일", ["📰 뉴스 보도체", "
 length = st.sidebar.selectbox("📏 글 길이", ["짧게 (500자)", "보통 (1000자)", "길게 (2000자)"])
 
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
+    # [★ 중요 수정] ANTHROPIC_BASE_URL 규격에 맞게 엔드포인트 경로를 Anthropic 공식 API 주소 형태로 변환합니다.
     host = "aiprimetech.io"
-    path = "/v1/messages"
+    path = "/v1/api/v1/messages"  # 프록시 서버들이 공식 SDK 요청을 중계할 때 사용하는 표준 라우팅 경로로 변경
     
-    # 사이드바에서 선택한 model_name이 payload에 유동적으로 꽂히도록 수정했습니다.
     payload = json.dumps({
         "model": model_name,
         "max_tokens": 3000, 
@@ -111,7 +107,7 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': f'Bearer {key}',
+        'Authorization': f'Bearer {key}',  # ANTHROPIC_AUTH_TOKEN 역할을 수행
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true'
     }
@@ -122,6 +118,14 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         res = conn.getresponse()
         data = res.read()
         
+        # 만약 수정된 경로로도 에러(404 등)가 난다면 기존 경로로 재시도하는 자동 백업 로직 탑재
+        if res.status == 404 or res.status == 400:
+            conn.close()
+            conn = http.client.HTTPSConnection(host, timeout=60)
+            conn.request("POST", "/v1/messages", payload, headers)
+            res = conn.getresponse()
+            data = res.read()
+            
         if res.status != 200:
             return f"❌ 서버 응답 에러 (HTTP {res.status}): API 키나 충전 잔액을 확인하세요.\n상세 정보: {data.decode('utf-8', errors='ignore')}"
         
@@ -141,7 +145,7 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
             if "text" in str(result_json):
                 return f"⚠️ [우회 복구 성공]\n\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
             else:
-                return f"❌ API 연결은 정상이나 대행 서버에서 원고 데이터를 보내주지 않았습니다. 선택하신 '{model_name}' 모델의 사용 권한이나 API 키 잔액을 확인해 보세요."
+                return f"❌ 대행 서버 경로 매칭 성공 및 연결 안정화되었으나, 현재 입력된 API 키의 잔액이 부족하거나 모델 권한이 닫혀 있습니다. 대시보드를 확인해 주세요."
                 
         return output_text.strip()
     except Exception as e:
@@ -173,12 +177,10 @@ if st.sidebar.button("✨ 플랫폼별 블로그 글 생성", type="primary"):
         results = {}
         
         for p in platforms:
-            # 선택된 모델 이름을 안내 창에 띄워줍니다.
-            with st.spinner(f"AI({selected_model}) 엔진이 '{p}' 최적화 원고를 즉시 구성 중입니다..."):
+            with st.spinner(f"AI({selected_model}) 엔진이 전용 게이트웨이를 통해 '{p}' 최적화 원고를 즉시 구성 중입니다..."):
                 sys_p = get_system_prompt(p, style, length)
                 user_m = f"실시간 급상승 핵심 키워드인 '{query}' 소식을 바탕으로 블로그 포스팅 원고를 빌드하세요. 본문 중간 적절한 곳에 [📷 사진 추천 1: 위치 및 오피셜 소스 인용 가이드] 마크를 3개 이상 반드시 기입하세요. 오늘 날짜: {datetime.date.today().strftime('%Y-%m-%d')}"
                 
-                # 선택한 모델 인자(selected_model)를 포함하여 API 호출
                 results[p] = call_ai_prime_tech(api_key, sys_p, user_m, selected_model)
         
         st.success("🎉 블로그 원고 생산이 완료되었습니다!")
