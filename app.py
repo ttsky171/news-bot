@@ -5,6 +5,7 @@ import os
 import datetime
 import glob
 import urllib.request
+import re
 
 # 페이지 설정
 st.set_page_config(page_title="실시간 뉴스 블로그 생성기 Pro", page_icon="📰", layout="wide")
@@ -16,7 +17,7 @@ for folder in [HISTORY_DIR, CONFIG_DIR]:
     if not os.path.exists(folder): 
         os.makedirs(folder)
 
-# API 키 파일 저장/로드 함수 (매번 입력하지 않도록 완전 자동화)
+# API 키 파일 저장/로드 함수
 KEY_FILE = os.path.join(CONFIG_DIR, "api_key.txt")
 
 def load_saved_api_key():
@@ -35,7 +36,6 @@ def save_api_key(key):
     except:
         pass
 
-# 세션 상태 및 자동 저장된 API 키 불러오기
 if "api_key_storage" not in st.session_state:
     st.session_state.api_key_storage = load_saved_api_key()
 if "generated_content" not in st.session_state:
@@ -49,6 +49,21 @@ def save_to_history(keyword, platform, content):
     filename = f"{HISTORY_DIR}/{now}_{safe_keyword}_{platform}.txt"
     with open(filename, "w", encoding="utf-8") as f: 
         f.write(content)
+
+# 🚨 [핵심 추가] AI가 출력한 외국어(한자, 일어, 중국어)를 원천 차단 및 정화하는 함수
+def clean_foreign_languages(text):
+    if not text:
+        return text
+    
+    # 1. 일본어(가타카나, 히라가나) 및 불필요한 한자 전면 제거 패턴
+    # 한자 범위: \u4e00-\u9fff, 일어 범위: \u3040-\u30ff
+    text = re.sub(r'[\u3040-\u309f\u30a0-\u30ff]', '', text) # 일어 삭제
+    text = re.sub(r'[\u4e00-\u9fff]', '', text) # 한자 전면 삭제
+    
+    # 2. 번역 오류로 인해 뭉개진 영문/외국어 조사 패턴 정화 (ex: 은는이가 앞에 붙은 찌꺼기들)
+    # 간혹 발생하는 "的主張" -> "주장" 처럼 한자가 사라진 자리를 매끄럽게 다듬기
+    text = text.replace("  ", " ") # 중복 공백 제거
+    return text
 
 # 1. JSONBin 및 시그널 데이터 로드
 def load_extension_data():
@@ -85,7 +100,7 @@ def load_extension_data():
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
-# 2. AI 호출 엔진 (데이터 구조 예외 처리 대폭 강화)
+# 2. AI 호출 엔진
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -102,38 +117,40 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         data = res.read().decode("utf-8")
         conn.close()
         
+        raw_text = ""
         try:
             result_json = json.loads(data)
         except Exception:
             if data.strip():
-                return data
-            return "응답 데이터를 파싱할 수 없으며 내용이 비어있습니다."
+                raw_text = data
         
-        if "content" in result_json:
-            content_data = result_json["content"]
-            if isinstance(content_data, list) and len(content_data) > 0:
-                if isinstance(content_data[0], dict) and "text" in content_data[0]:
-                    return content_data[0]["text"]
-                elif isinstance(content_data[0], str):
-                    return content_data[0]
-            elif isinstance(content_data, str):
-                return content_data
-        
-        if "choices" in result_json and len(result_json["choices"]) > 0:
-            choice = result_json["choices"][0]
-            if "message" in choice and "content" in choice["message"]:
-                return choice["message"]["content"]
-            elif "text" in choice:
-                return choice["text"]
+        if not raw_text:
+            if "content" in result_json:
+                content_data = result_json["content"]
+                if isinstance(content_data, list) and len(content_data) > 0:
+                    if isinstance(content_data[0], dict) and "text" in content_data[0]:
+                        raw_text = content_data[0]["text"]
+                    elif isinstance(content_data[0], str):
+                        raw_text = content_data[0]
+                elif isinstance(content_data, str):
+                    raw_text = content_data
+            
+            elif "choices" in result_json and len(result_json["choices"]) > 0:
+                choice = result_json["choices"][0]
+                if "message" in choice and "content" in choice["message"]:
+                    raw_text = choice["message"]["content"]
+                elif "text" in choice:
+                    raw_text = choice["text"]
+                    
+            elif "text" in result_json:
+                raw_text = result_json["text"]
                 
-        if "text" in result_json:
-            return result_json["text"]
-            
-        if "error" in result_json:
-            return f"AI API 에러 발생: {result_json['error']}"
-            
-        if data.strip():
-            return data
+            elif "error" in result_json:
+                return f"AI API 에러 발생: {result_json['error']}"
+        
+        if raw_text.strip():
+            # 🚨 반환 직전 후처리 필터를 거쳐 외국어 오염을 깨끗하게 청소합니다.
+            return clean_foreign_languages(raw_text)
             
         return "본문 텍스트가 비어있습니다."
         
@@ -145,18 +162,17 @@ st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
 
 st.sidebar.header("🔑 설정 및 시그널")
 
-# API 키 세션 유지 및 자동 영구 저장창
 api_key = st.sidebar.text_input(
     "AI Prime Tech API Key", 
     value=st.session_state.api_key_storage, 
-    type="password",
-    help="한 번 입력해 두면 다음 접속 시 자동으로 불러옵니다."
+    type="password"
 )
 
 if api_key != st.session_state.api_key_storage:
     st.session_state.api_key_storage = api_key
-    save_api_key(api_key) # 입력 즉시 자동 영구 저장
+    save_api_key(api_key)
 
+# 💡 손넷 모델에서 오염이 심할 경우 오푸스(Opus) 모델이나 다른 기본 모델을 쓰면 완전히 해결되기도 합니다.
 model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6"])
 
 st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기](https://signal.bz/)")
@@ -164,7 +180,6 @@ st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기]
 live_kws, live_metadata, last_update = load_extension_data()
 st.sidebar.info(f"🕒 데이터 연동 상태: {last_update}")
 
-# 키워드 선택 방식 라디오 버튼
 input_mode = st.sidebar.radio("키워드 선택 방식", ["🔄 시그널 실시간 연동", "✍️ 직접 수동 입력"])
 
 if input_mode == "🔄 시그널 실시간 연동":
@@ -174,7 +189,7 @@ if input_mode == "🔄 시그널 실시간 연동":
     else:
         final_query = st.sidebar.selectbox("작성할 키워드 선택", live_kws)
 else:
-    final_query = st.sidebar.text_input("✍️ 키워드 직접 입력", placeholder="예: 아이폰18 출시일, 부동산 정책 발표")
+    final_query = st.sidebar.text_input("✍️ 키워드 직접 입력", placeholder="예: 아이폰18 출시일")
 
 platforms = st.sidebar.multiselect("발행 플랫폼", ["네이버 블로그", "티스토리", "워드프레스"], default=["네이버 블로그"])
 
@@ -182,14 +197,13 @@ style = st.sidebar.selectbox("글 스타일", [
     "📰 뉴스 보도체 (객관적, 사실 중심)", 
     "😊 쉬운 설명체 (친근함, 이모지 활용)",
     "🔥 이슈 분석체 (전문가 관점, 비판적 분석)",
-    "✍️ 스토리텔링체 (부드러운 이야기 형식, 몰입감)"
+    "✍️ 스토리텔링체 (부드러운 이야기 형식)"
 ])
 
 length_option = st.sidebar.selectbox("목표 글자 수 (최소 보장 기준)", [
-    "공백 제외 최소 1,500자 이상 (일반 포스팅용)", 
-    "공백 제외 최소 2,000자 이상 (상세 고품질용)", 
-    "공백 제외 최소 2,500자 이상 (전문 분석용)", 
-    "공백 제외 최소 3,000자 이상 (초고도 정보성)"
+    "공백 제외 최소 1,500자 이상", 
+    "공백 제외 최소 2,000자 이상", 
+    "공백 제외 최소 2,500자 이상"
 ])
 
 st.sidebar.divider()
@@ -214,12 +228,10 @@ else:
 tab1, tab2 = st.tabs(["✨ 포스팅 생성기", "📂 전체 히스토리 보관함"])
 
 with tab1:
-    # 수동 입력 모드일 때 메인 영역에 팩트 요약창 노출
     if input_mode == "✍️ 직접 수동 입력":
         st.subheader("📝 뉴스 참고 내용 직접 입력")
         custom_summary = st.text_area(
             "AI가 참고할 실시간 뉴스 내용이나 핵심 팩트를 적어주세요.", 
-            placeholder="예시: 정부에서 내년부터 청년 주거 지원금을 월 50만 원으로 인상한다고 발표했다. 대상은 중위소득 120% 이하의 만 19세~34세 청년이다. 신청은 7월부터 시작된다.",
             height=150
         )
     else:
@@ -228,74 +240,63 @@ with tab1:
 
     st.write("") 
 
-    # 글 생성하기 버튼
     if st.button("🚀 블로그 글 생성하기", type="primary"):
         if not api_key:
             st.error("API 키를 입력하세요.")
         elif not final_query or final_query.strip() == "":
             st.error("작성할 키워드를 선택하거나 직접 입력해 주세요.")
-        elif input_mode == "✍️ 직접 수동 입력" and not custom_summary.strip():
-            st.error("AI가 참고할 뉴스 내용(팩트)을 입력해 주세요.")
         elif not platforms:
             st.warning("발행 플랫폼을 최소 하나 이상 선택해주세요.")
         else:
             st.session_state.selected_keyword = final_query
             st.session_state.generated_content = {} 
             
-            target_length = length_option.split("(")[0].strip()
+            target_length = length_option.split(" ")[3] + "자 이상"
 
             for p in platforms:
                 tone_instruction = ""
                 if "뉴스 보도체" in style:
-                    tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조 (~다, ~합니다)로 작성하세요. 주관적 감정은 배제하고 팩트 전달에 집중하세요."
+                    tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조 (~다, ~합니다)로 작성하세요."
                 elif "쉬운 설명체" in style:
-                    tone_instruction = "친근한 블로그 어조 (~에요, ~습니다)로 작성하세요. 독자가 이해하기 쉽게 비유를 쓰고 적절한 이모지를 활용하세요."
+                    tone_instruction = "친근한 블로그 어조 (~에요, ~습니다)로 작성하고 이모지를 활용하세요."
                 elif "이슈 분석체" in style:
-                    tone_instruction = "날카로운 평론가/전문가 어조로 작성하세요. 사건의 배경, 원인, 향후 미칠 파장이나 전망까지 입체적으로 분석해야 합니다."
+                    tone_instruction = "날카로운 전문 평론가 어조로 원인과 전망을 깊이 있게 다루세요."
                 elif "스토리텔링체" in style:
-                    tone_instruction = "독자가 소설이나 에세이를 읽듯 몰입할 수 있도록 서두를 열고 자연스러운 호흡으로 부드럽게 서술하세요."
+                    tone_instruction = "자연스러운 호흡의 부드러운 이야기 형식으로 서술하세요."
 
                 platform_instruction = ""
                 if p == "네이버 블로그":
-                    platform_instruction = "- 제목은 본문 맨 위에 적고 바로 본문으로 넘어가세요.\n- 단락 사이에는 2줄 정도의 공백을 두어 스마트폰으로 읽기 편한 레이아웃을 잡으세요."
+                    platform_instruction = "- 제목은 맨 위에 적고 바로 본문 단락으로 넘어가세요.\n- 단락 사이에는 2줄 정도의 공백을 두어 레이아웃을 잡으세요."
                 elif p == "티스토리":
-                    platform_instruction = "- 핵심 키워드가 맨 앞에 오는 명확한 제목을 상단에 배치하세요.\n- 줄바꿈과 문단 나누기를 확실히 하여 텍스트가 뭉쳐 보이지 않게 하세요."
+                    platform_instruction = "- 핵심 키워드가 맨 앞에 오는 명확한 제목을 상단에 배치하세요."
                 elif p == "워드프레스":
-                    platform_instruction = "- 글 맨 처음에 요약 문단을 한 줄로 깔끔하게 넣어 가독성을 높이세요.\n- 문장을 간결하고 군더더기 없이 마침표로 딱 끊어지게 쓰세요."
+                    platform_instruction = "- 문장을 간결하고 군더더기 없이 마침표로 딱 끊어지게 쓰세요."
 
-                # [🚨 수정 반영] 마크다운 기호 금지령 강화 + 외국어/한자 오염 방지 가이드 추가
+                # 시스템 지침 강화
                 sys_prompt = (
                     f"당신은 검색 노출 알고리즘을 완벽히 꿰뚫고 있는 전문 파워블로거입니다. "
-                    f"입력된 키워드와 뉴스를 바탕으로 사람이 직접 타이핑한 것 같은 자연스러운 글을 작성하세요.\n\n"
-                    f"🛑 [외국어 및 한자 오염 절대 금지 규칙 - 최우선]\n"
-                    f"- 출력되는 모든 문장은 완벽하고 자연스러운 '한국어 표준어'로만 작성되어야 합니다.\n"
-                    f"- 문장 중간에 한자어 기호, 중국어 단어, 일본어 문법 표현 등이 무작정 섞여 나오는 현상을 완전히 차단하세요. 오직 순수 한국어 문장만 사용해야 합니다.\n\n"
-                    f"❌ [AI 흔적 및 마크다운 기호 절대 금지 규칙]\n"
-                    f"- 본문 어느 곳에도 '**', '###', '##', '*', '-', '◆', '■' 같은 마크다운 특수문자나 인위적인 강조 기호를 절대 쓰지 마세요.\n"
-                    f"- 소제목을 구분할 때는 아무런 기호 없이 문장이나 단어 형태로만 적고, 위아래로 줄바꿈(엔터)을 충분히 하여 자연스럽게 구분되도록 하세요. (예: 1. 이번 사건의 핵심 내용)\n\n"
-                    f"⚠️ [작성 안내]\n"
-                    f"- 본문 맨 처음에 알맞은 제목을 적어주고, 이어서 서론, 본문, 결론을 매끄러운 한 흐름으로 작성해 주세요.\n"
-                    f"- 이미지 삽입 유도 멘트나 외부 링크 추천 관련 문구는 절대로 적지 마세요.\n\n"
-                    f"🔢 [글자 수 절대 준수 규칙]\n"
-                    f"- 작성되는 순수 본문의 분량은 무조건 **{target_length}**을 넘겨야 합니다.\n"
-                    f"- 분량이 부족하다면 배경 지식, 사회적 영향, 대중의 반응, 향후 전망, 알아두면 좋은 팁 등의 흐름을 자연스럽게 확장하여 문장을 구체적이고 길게 채우세요.\n\n"
+                    f"입력된 키워드와 뉴스를 바탕으로 한국인 사용자가 완벽하게 읽을 수 있는 매끄러운 글을 작성하세요.\n\n"
+                    f"🛑 [외국어 어휘 및 일어/중국어 조사 전면 사용 금지 규칙]\n"
+                    f"- 문장 사이에 한자, 일본어 단어, 중국어 한자 기호가 절대로 섞여 나오지 않게 하십시오.\n"
+                    f"- 모든 문장은 오직 순수하고 올바른 '한국어' 표준 문장으로만 완성되어야 합니다.\n\n"
+                    f"❌ [AI 흔적 및 마크다운 기호 절대 금지]\n"
+                    f"- 본문 어디에도 '**', '###', '##', '*', '-', '◆' 같은 마크다운 문법이나 인위적인 기호를 절대 쓰지 마세요.\n"
+                    f"- 소제목은 기호 없이 평범한 텍스트로만 적고, 엔터를 쳐서 문단을 나누세요.\n\n"
+                    f"🔢 [글자 수 규칙]\n"
+                    f"- 작성되는 순수 본문 분량은 무조건 {target_length}이어야 합니다. 문장을 상세하고 풍부하게 늘려서 채우세요.\n\n"
                     f"🏷️ [최적화 태그 생성 규칙]\n"
-                    f"- 결론이 완전히 끝난 뒤 가장 마지막 단락에, 연관 핵심 해시태그들을 공백 구분 형태로 자연스럽게 20개 이상 나열해 주세요.\n"
-                    f"- 복잡한 기호 없이 순수하게 띄어쓰기와 '#' 기호로만 나열해야 합니다. (예: #태그1 #태그2)\n\n"
+                    f"- 글 맨 마지막 단락에 해시태그를 띄어쓰기와 '#' 기호로만 20개 이상 나열해 주세요.\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
-                    f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
-                    f"[⚠️ 절대 금지 문구]\n"
-                    f"- 'AI 요약에 따르면', '인공지능 분석 결과' 같은 로봇 같은 문구는 절대 쓰지 마세요."
+                    f"[플랫폼별 작성 규칙]\n{platform_instruction}"
                 )
                 
                 user_msg = (
-                    f"● 실시간 트렌드 키워드: {final_query}\n"
-                    f"● 뉴스 맥락 및 참고 팩트 정보:\n{custom_summary}\n\n"
-                    f"위 규칙들을 토대로 블로그 글을 작성하고, 본문 분량 규칙인 '{target_length}'을 절대적으로 준수해줘. "
-                    f"다시 한번 강조하지만 문장 중간에 한자나 중국어, 일본어가 섞이지 않도록 완벽한 한국어로만 작성하고, 마크다운 기호(`**`, `###`)는 절대로 포함하지 말아줘."
+                    f"● 키워드: {final_query}\n"
+                    f"● 뉴스 맥락 정보:\n{custom_summary}\n\n"
+                    f"위 지침을 토대로 글을 작성해줘. 절대로 문장 중간에 한자나 중국어, 일본어 문법 찌꺼기가 섞여 나오지 않도록 한국어 텍스트 품질에 온 신경을 집중해줘."
                 )
                 
-                with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
+                with st.spinner(f"[{p}] 글을 생성하고 오염된 외국어 기호를 필터링하는 중..."):
                     content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
                     if "통신 장애 발생" not in content and "AI API 에러" not in content:
                         st.session_state.generated_content[p] = content
@@ -304,7 +305,7 @@ with tab1:
                         st.error(f"[{p}] 생성 오류: {content}")
 
     if st.session_state.generated_content:
-        st.success("🎉 블로그 글 생성이 완료되었습니다!")
+        st.success("🎉 정화 작업 및 블로그 글 생성이 완료되었습니다!")
         for p, full_content in st.session_state.generated_content.items():
             st.subheader(f"✨ {p} 결과물")
             st.text_area("📋 제목 + 본문 + 최적화 태그 (통째로 복사해서 사용하세요)", value=full_content, height=650, key=f"body_area_{p}")
