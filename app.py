@@ -1,12 +1,97 @@
+import streamlit as st
+import json
+import http.client
+import os
+import datetime
+
+# 페이지 설정
+st.set_page_config(page_title="실시간 뉴스 블로그 생성기", page_icon="📰", layout="wide")
+
+# 폴더 관리
+HISTORY_DIR = "blog_history"
+if not os.path.exists(HISTORY_DIR): 
+    os.makedirs(HISTORY_DIR)
+
+def save_to_history(keyword, platform, content):
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_keyword = "".join(c for c in keyword if c.isalnum() or c in (' ', '_', '-')).strip()
+    filename = f"{HISTORY_DIR}/{now}_{safe_keyword}_{platform}.txt"
+    with open(filename, "w", encoding="utf-8") as f: 
+        f.write(content)
+
+# 1. JSONBin 데이터 로드
+def load_extension_data():
+    import urllib.request
+    BIN_ID = "6a0c24886610dd3ae86c19cd"
+    MASTER_KEY = "$2a$10$XJlSzhQ1AoOvMQqIH95KOeLDbr7ohp4ocKXh2V3iAJxHW.QvAnOm6"
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
+        req = urllib.request.Request(url, headers={"X-Master-Key": MASTER_KEY})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            actual = res_data.get("record", {})
+            return actual.get("keywords", []), actual.get("metadata", {}), actual.get("updated_at", "미정")
+    except Exception:
+        return [], {}, "연동 대기 중"
+
+# 2. AI 호출 엔진 (에러 예외 처리 강화)
+def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
+    host = "aiprimetech.io"
+    payload = json.dumps({
+        "model": model_name,
+        "max_tokens": 4000, 
+        "messages": [{"role": "user", "content": f"[System 규칙: {sys_prompt}]\n\n{user_msg}"}]
+    })
+    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {key}'}
+    
+    try:
+        conn = http.client.HTTPSConnection(host, timeout=60)
+        conn.request("POST", "/v1/messages", payload, headers)
+        res = conn.getresponse()
+        data = res.read().decode("utf-8")
+        conn.close()
+        
+        result_json = json.loads(data)
+        
+        # API 응답 구조 예외 처리
+        if "content" in result_json and len(result_json["content"]) > 0:
+            return result_json["content"][0].get("text", "본문 텍스트가 비어있습니다.")
+        elif "error" in result_json:
+            return f"AI API 에러 발생: {result_json['error']}"
+        else:
+            return f"알 수 없는 응답 형식: {data}"
+    except Exception as e:
+        return f"통신 장애 발생: {str(e)}"
+
+# 3. 화면 UI
+st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
+
+# 사이드바
+st.sidebar.header("🔑 설정 및 시그널")
+api_key = st.sidebar.text_input("AI Prime Tech API Key", type="password")
+model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6"])
+
+live_kws, live_metadata, last_update = load_extension_data()
+
+# 키워드 검증
+if not live_kws:
+    live_kws = ["대기 중..."]
+query = st.sidebar.selectbox("작성할 키워드 선택", live_kws)
+platforms = st.sidebar.multiselect("발행 플랫폼", ["네이버 블로그", "티스토리"], default=["네이버 블로그"])
+style = st.sidebar.selectbox("글 스타일", ["📰 뉴스 보도체", "😊 쉬운 설명체"])
+
 # 메인 생성 로직
 if st.sidebar.button("✨ 글 생성하기", type="primary"):
     if not api_key:
         st.error("API 키를 입력하세요.")
     elif query == "대기 중..." or not query:
-        st.error("작성할 키워드를 선택해주세요.")
+        st.error("작성할 유효한 키워드를 선택해주세요.")
+    elif not platforms:
+        st.warning("발행 플랫폼을 최소 하나 이상 선택해주세요.")
     else:
         factual_summary = live_metadata.get(query, "최신 정보 없음")
         
+        # 플랫폼별 순회하며 생성
         for p in platforms:
             # 1. 스타일에 따른 톤앤매너 지정
             tone_instruction = ""
@@ -15,7 +100,7 @@ if st.sidebar.button("✨ 글 생성하기", type="primary"):
             elif style == "😊 쉬운 설명체":
                 tone_instruction = "친근한 블로그 어조(~에요, ~습니다)로 작성하세요. 독자가 이해하기 쉽게 비유를 섞어가며 친절하게 설명하세요. 적절한 이모지를 섞어주면 좋습니다."
 
-            # 2. 플랫폼별 특성 반영 (네이버 vs 티스토리)
+            # 2. 플랫폼별 특성 반영
             platform_instruction = ""
             if p == "네이버 블로그":
                 platform_instruction = (
@@ -48,19 +133,17 @@ if st.sidebar.button("✨ 글 생성하기", type="primary"):
                 f"위 정보를 완벽히 녹여내어 독자들이 끝까지 읽을 수 있는 매력적인 블로그 포스팅을 완성해줘."
             )
             
-            with st.spinner(f"[{p}] {style} 스타일로 글을 생성하는 중..."):
-                try:
-                    content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
-                    
-                    # 화면 출력 구조 개선
-                    st.success(f"✅ {p} 생성 완료!")
-                    st.subheader(f"✨ {p} 결과물 ({style})")
-                    
-                    # 복사하기 편하도록 텍스트 영역 제공
-                    st.text_area(f"{p} 본문 (복사용)", value=content, height=600, key=f"txt_{p}")
-                    
-                    # 히스토리 저장
+            # 고유한 위젯 Key를 보장하기 위해 플랫폼명을 키값에 조합
+            widget_key = f"txt_area_{p.replace(' ', '_')}"
+            
+            with st.spinner(f"[{p}] 글 생성 중..."):
+                content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
+                
+                st.subheader(f"✨ {p} 결과물 ({style})")
+                st.text_area("내용", value=content, height=500, key=widget_key)
+                
+                # 오류 메시지가 아닌 정상 글일 때만 파일 저장
+                if "통신 장애 발생" not in content and "AI API 에러" not in content:
                     save_to_history(query, p, content)
-                    st.divider()
-                except Exception as e:
-                    st.error(f"{p} 생성 중 오류가 발생했습니다: {str(e)}")
+            
+            st.divider()
