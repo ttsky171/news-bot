@@ -14,7 +14,7 @@ HISTORY_DIR = "blog_history"
 if not os.path.exists(HISTORY_DIR): 
     os.makedirs(HISTORY_DIR)
 
-# [💡 핵심 수정] 세션 상태 초기화 (API Key 보관 주입)
+# 세션 상태 초기화 (API Key 보관 유지)
 if "api_key_storage" not in st.session_state:
     st.session_state.api_key_storage = ""
 if "generated_content" not in st.session_state:
@@ -119,14 +119,12 @@ st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
 
 st.sidebar.header("🔑 설정 및 시그널")
 
-# [💡 핵심 수정] 입력 상자가 세션 상태에 저장된 값을 기본값(value)으로 바라보게 세팅
+# API 키 세션 유지 상자
 api_key = st.sidebar.text_input(
     "AI Prime Tech API Key", 
     value=st.session_state.api_key_storage, 
     type="password"
 )
-
-# 입력값이 변경되면 즉시 세션 보관소에 업데이트
 if api_key != st.session_state.api_key_storage:
     st.session_state.api_key_storage = api_key
 
@@ -157,11 +155,12 @@ style = st.sidebar.selectbox("글 스타일", [
     "✍️ 스토리텔링체 (부드러운 이야기 형식, 몰입감)"
 ])
 
-length_option = st.sidebar.selectbox("목표 글자 수", [
-    "공백 제외 1,500자 내외 (기본 분량)", 
-    "공백 제외 2,000자 내외 (상세한 포스팅)", 
-    "공백 제외 2,500자 이상 (전문적인 분석)", 
-    "공백 제외 3,000자 이상 (초고도 정보성)"
+# [🔥 핵심 수정: 글자 수 범위를 명확한 '최소 제한선' 기준으로 세분화 변경]
+length_option = st.sidebar.selectbox("목표 글자 수 (최소 보장 기준)", [
+    "공백 제외 최소 1,500자 이상 (일반 포스팅용)", 
+    "공백 제외 최소 2,000자 이상 (상세 고품질용)", 
+    "공백 제외 최소 2,500자 이상 (전문 분석용)", 
+    "공백 제외 최소 3,000자 이상 (초고도 정보성)"
 ])
 
 st.sidebar.divider()
@@ -213,6 +212,9 @@ with tab1:
             st.session_state.selected_keyword = final_query
             st.session_state.generated_content = {} 
             
+            # 실제 프롬프트에 주입할 글자 수 텍스트만 추출
+            target_length = length_option.split("(")[0].strip()
+
             for p in platforms:
                 tone_instruction = ""
                 if "뉴스 보도체" in style:
@@ -238,13 +240,15 @@ with tab1:
                     f"⚠️ [작성 안내]\n"
                     f"- 본문 맨 처음에 알맞은 제목을 크게 적어주고, 이어서 서론, 본문(소제목 포함), 결론을 구분 기호 없이 한 번에 작성해 주세요.\n"
                     f"- 이미지나 외부 링크 추천 관련 멘트는 절대로 적지 마세요.\n\n"
-                    f"🏷️ [스마트블록 최적화 태그 생성 규칙 - 필수]\n"
+                    f"🔢 [🔥 글자 수 절대 준수 규칙 - 최우선 체크]\n"
+                    f"- 작성되는 순수 본문(태그 제외)의 분량은 무조건 **{target_length}**을 넘겨야 합니다.\n"
+                    f"- 대충 요약해서 분량이 미달되면 안 됩니다. 정보가 부족하다면 팩트의 배경, 사회적 파장, 네티즌들의 반응, 향후 전망, 주의사항 등의 소제목을 추가로 개설해서라도 문장을 길고 구체적으로 늘려 쓰세요.\n\n"
+                    f"🏷️ [스마트블록 최적화 태그 생성 규칙]\n"
                     f"- 결론이 끝난 뒤 맨 마지막 줄에, 네이버 스마트블록 세부 분류에 노출되기 적합한 **연관 핵심 태그를 반드시 20개 이상** 한 줄로 이어서 작성하세요.\n"
-                    f"- 태그는 대중의 검색 의도, 파생 키워드, 타겟층(예: #청년, #직장인 등)이 골고루 조합된 고품질 키워드로 구성해야 합니다.\n"
+                    f"- 태그는 대중의 검색 의도, 파생 키워드, 타겟층이 골고루 조합된 고품질 키워드로 구성해야 합니다.\n"
                     f"- 출력 형식 예시: #키워드1 #키워드2 #세부키워드3 ... (20개 이상 채울 것)\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
                     f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
-                    f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 정보를 축약하지 말고 깊이 있게 가득 채워주세요.\n\n"
                     f"[⚠️ 절대 금지 규칙]\n"
                     f"- 본문 내에서 마크다운 강조 기호인 '**' (별표 두 개)는 절대 사용하지 마세요.\n"
                     f"- 'AI 요약에 따르면' 같은 인위적인 문구는 절대 금지합니다."
@@ -253,7 +257,7 @@ with tab1:
                 user_msg = (
                     f"● 실시간 트렌드 키워드: {final_query}\n"
                     f"● 뉴스 맥락 및 참고 팩트 정보:\n{custom_summary}\n\n"
-                    f"위 규칙들을 토대로 블로그 글을 작성하고, 맨 밑에 스마트블록 노출용 태그 20개 이상을 반드시 포함시켜줘."
+                    f"위 규칙들을 토대로 블로그 글을 작성하고, 본문 분량 규칙인 '{target_length}'을 절대적으로 지켜서 길게 써줘. 마지막 줄에 스마트블록 태그 20개 이상도 빼놓지 마."
                 )
                 
                 with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
