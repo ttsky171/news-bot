@@ -4,7 +4,6 @@ import http.client
 import os
 import datetime
 import glob
-import re
 
 # 페이지 설정
 st.set_page_config(page_title="실시간 뉴스 블로그 생성기 Pro", page_icon="📰", layout="wide")
@@ -44,7 +43,7 @@ def load_extension_data():
     except Exception:
         return [], {}, "연동 대기 중"
 
-# 2. AI 호출 엔진 (타임아웃 120초로 연장)
+# 2. AI 호출 엔진 (대기시간 120초로 여유롭게 설정)
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -55,7 +54,7 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {key}'}
     
     try:
-        conn = http.client.HTTPSConnection(host, timeout=120) # 120초 안정성 확보
+        conn = http.client.HTTPSConnection(host, timeout=120) 
         conn.request("POST", "/v1/messages", payload, headers)
         res = conn.getresponse()
         data = res.read().decode("utf-8")
@@ -167,31 +166,23 @@ with tab1:
 
                 platform_instruction = ""
                 if p == "네이버 블로그":
-                    platform_instruction = "- 제목은 클릭을 부르는 가장 매력적인 제목을 본문 맨 위에 크게 배치하세요.\n- '서론 - 본문(소제목 분할) - 결론' 구조를 명확히 통합하여 이어서 쓰세요."
+                    platform_instruction = "- 제목은 클릭을 부르는 가장 매력적인 제목을 본문 맨 위에 배치하세요.\n- '서론 - 본문(소제목 분할) - 결론' 구조를 명확히 통합하여 자연스럽게 작성하세요."
                 elif p == "티스토리":
-                    platform_instruction = "- 구글 SEO 친화적인 구조로, 핵심 키워드가 맨 앞에 오는 명확한 제목을 상단에 배치하세요.\n- 본문은 대제목, 소제목 구조를 지켜 논리적으로 이어서 작성하세요."
+                    platform_instruction = "- 구글 SEO 친화적인 구조로, 핵심 키워드가 맨 앞에 오는 명확한 제목을 상단에 배치하세요.\n- 본문은 대제목, 소제목 구조를 지켜 논리적으로 작성하세요."
                 elif p == "워드프레스":
-                    platform_instruction = "- 글 맨 처음에 '요약(Snippet)' 문단을 한 줄로 명확하게 넣어 가독성을 높이세요.\n- 소제목 구분을 완벽히 하고 문장을 간결하게 이어서 작성하세요."
+                    platform_instruction = "- 글 맨 처음에 '요약(Snippet)' 문단을 한 줄로 명확하게 넣어 가독성을 높이세요.\n- 소제목 구분을 완벽히 하고 문장을 간결하게 작성하세요."
 
-                # [💡 요구사항 반영] 본문 통합 및 링크 구역 엄격 분리 프롬프트
+                # [🔥 프롬프트 대폭 간소화: 오류 원천 차단]
                 sys_prompt = (
-                    f"당신은 실시간 트렌드 전문 파워블로거이자 디지털 카피라이터입니다. 입력된 타겟 키워드와 뉴스 데이터를 결합하여 글을 작성하세요.\n\n"
-                    f"⚠️ [출력 양식 규칙 - 중요]\n"
-                    f"당신의 답변은 반드시 아래의 두 구조로만 명확하게 분리해서 작성해야 합니다. 다른 불필요한 설명은 포함하지 마세요.\n\n"
-                    f"--- [블로그 본문 시작] ---\n"
-                    f"(여기에 제목, 서론, 본문, 결론 내용을 단락과 소제목을 나누어 통째로 자연스럽게 이어서 작성하세요)\n"
-                    f"--- [블로그 본문 끝] ---\n\n"
-                    f"--- [추천 링크 시작] ---\n"
-                    f"1. 공식 출처 및 관련 사이트 링크: (실제 유효한 URL 주소)\n"
-                    f"2. 추천 무료 이미지 다운로드 링크: (Unsplash, Pixabay 등 추천 검색어와 URL 주소)\n"
-                    f"--- [추천 링크 끝] ---\n\n"
+                    f"당신은 실시간 트렌드 전문 파워블로거이자 디지털 카피라이터입니다. 입력된 타겟 키워드와 뉴스 데이터를 결합하여 완성도 높은 포스팅을 작성하세요.\n\n"
+                    f"⚠️ [작성 안내]\n"
+                    f"- 본문 맨 처음에 알맞은 제목을 크게 적어주고, 이어서 서론, 본문(소제목 포함), 결론을 구분 기호 없이 물 흐르듯 한 번에 작성해 주세요.\n"
+                    f"- 글의 맨 마지막 줄(결론 뒤)에는 다음과 같이 번호를 매겨 사진 활용 및 추천 링크 정보를 단 두 줄로만 추가해 주세요.\n"
+                    f"  1. 관련 공식 출처: (뉴스 맥락에 맞는 기관명 또는 SNS 주소 명시)\n"
+                    f"  2. 추천 무료 이미지 소스: Unsplash (https://unsplash.com), Pixabay (https://pixabay.com)\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
                     f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
                     f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 알차게 채워주세요.\n\n"
-                    f"[🔗 실제 URL 매칭 규칙]\n"
-                    f"- 엔터테인먼트/인물 관련 뉴스: 인스타그램 메인 주소(https://www.instagram.com) 혹은 소속사 사이트 링크 제공\n"
-                    f"- 정부 정책, 부동산, 사회 법안 관련 뉴스: 대한민국 정책브리핑(https://www.korea.kr) 또는 국토교통부(https://www.molit.go.kr) 등 매칭되는 공식 도메인 제공\n"
-                    f"- 무료 이미지 사이트 주소 필수 포함: Unsplash(https://unsplash.com), Pixabay(https://pixabay.com)\n\n"
                     f"[⚠️ 절대 금지 규칙]\n"
                     f"- 본문 내에서 마크다운 강조 기호인 '**' (별표 두 개)는 절대 사용하지 마세요.\n"
                     f"- 'AI 요약에 따르면' 같은 인위적인 문구는 절대 금지합니다."
@@ -200,7 +191,7 @@ with tab1:
                 user_msg = (
                     f"● 실시간 트렌드 키워드: {final_query}\n"
                     f"● 뉴스 맥락 및 참고 팩트 정보:\n{custom_summary}\n\n"
-                    f"지정된 양식 분리 기호(---)를 지켜서 완성도 높은 포스팅과 실제 링크 정보를 작성해줘."
+                    f"위 규칙들을 토대로 블로그 글을 처음부터 끝까지 하나의 완성된 텍스트로 쭉 작성해줘."
                 )
                 
                 with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
@@ -211,36 +202,15 @@ with tab1:
                     else:
                         st.error(f"[{p}] 생성 오류: {content}")
 
-    # 생성된 결과물 화면 출력
+    # 생성된 결과물 화면 출력 (조건문이나 슬라이싱 없이 출력하도록 변경)
     if st.session_state.generated_content:
         st.success("🎉 블로그 글 생성이 완료되었습니다!")
         
         for p, full_content in st.session_state.generated_content.items():
             st.subheader(f"✨ {p} 결과물")
             
-            # 텍스트 분리 파싱 처리 (안정적인 문자열 split 방식)
-            blog_body = ""
-            blog_links = ""
-            
-            try:
-                body_match = re.search(r"--- \[-블로그 본문 시작-\] ---(.*)--- \[-블로그 본문 끝-\] ---", full_content, re.DOTALL)
-                if not body_match: # 대괄호나 하이픈 기호 유연하게 재체크
-                    body_match = re.search(r"--- \[블로그 본문 시작\] ---(.*)--- \[블로그 본문 끝\] ---", full_content, re.DOTALL)
-                
-                link_match = re.search(r"--- \[추천 링크 시작\] ---(.*)--- \[추천 링크 끝\] ---", full_content, re.DOTALL)
-                
-                blog_body = body_match.group(1).strip() if body_match else full_content
-                blog_links = link_match.group(1).strip() if link_match else "추천 링크가 포함되지 않았습니다."
-            except Exception:
-                blog_body = full_content
-                blog_links = "하단 본문을 참조하세요."
-            
-            # [💡 요구사항 반영] 전체 본문 통합 상자 (드래그 및 통복사 가능)
-            st.text_area("📋 [통합] 제목 + 서론 + 본문 + 결론 (통째로 복사해서 사용하세요)", value=blog_body, height=500, key=f"body_area_{p}")
-            
-            # [💡 요구사항 반영] 1. 링크 2. 링크 형태로 분리된 구역
-            st.markdown("🔗 **실제 사진 정보 및 추천 링크 구역**")
-            st.info(blog_links)
+            # [💡 핵심 수정] AI가 준 답변을 그대로 안전하게 띄워 통복사 가능하게 만듦
+            st.text_area("📋 제목 + 서론 + 본문 + 결론 + 추천 링크 (통째로 복사해서 사용하세요)", value=full_content, height=600, key=f"body_area_{p}")
             st.divider()
         
         # 2단계: 썸네일 이미지 및 프롬프트 생성 구역
@@ -252,28 +222,21 @@ with tab1:
                 thumb_sys_prompt = (
                     "당신은 프로 수석 그래픽 디자이너입니다. 제공되는 키워드를 기반으로 썸네일 일러스트 디자인 콘셉트를 명확히 기획하고, "
                     "DALL-E 3나 Midjourney에서 실사 혹은 트렌디한 3D 그래픽 아트로 뽑아낼 수 있는 완성도 높은 영어 프롬프트를 딱 하나 완성해야 합니다. "
-                    "답변은 반드시 '[디자인 가이드라인]: 내용' 과 '[영어 프롬프트]: 영어내용' 형태로 명확히 나누어 작성해 주세요."
+                    "출력은 딴 소리 없이 영어 프롬프트 한 문장으로만 간단하게 작성해 주세요."
                 )
                 
-                thumb_user_msg = f"실시간 키워: {st.session_state.selected_keyword}\n\n이 주제에 매칭되는 가장 화제성 높은 썸네일 프롬프트를 만들어줘."
+                thumb_user_msg = f"실시간 키워드: {st.session_state.selected_keyword}"
                 thumb_result = call_ai_prime_tech(api_key, thumb_sys_prompt, thumb_user_msg, model)
                 st.session_state.thumbnail_result = thumb_result
                 
         if st.session_state.thumbnail_result:
-            st.write("### 💡 추천 썸네일 제작 가이드 & 프롬프트")
-            st.info(st.session_state.thumbnail_result)
-            
-            st.markdown("#### 🚀 실시간 생성 이미지 프리뷰")
-            
-            prompt_match = re.search(r"\[영어 프롬프트\]:(.*)", st.session_state.thumbnail_result, re.DOTALL or re.IGNORECASE)
-            extracted_prompt = prompt_match.group(1).strip() if prompt_match else "A trendy digital illustration for " + st.session_state.selected_keyword
-            
-            st.code(extracted_prompt, language="text")
+            st.write("### 💡 AI 이미지 생성용 추천 영어 프롬프트")
+            st.code(st.session_state.thumbnail_result, language="text")
             st.caption("위 영어 프롬프트를 복사하여 이미지 생성 AI 창에 그대로 넣으시면 고품질 사진이 제작됩니다.")
             
-            # 깨지던 이미지 제작 컴포넌트를 샘플 가이드 플레이스홀더 주소와 결합하여 수정 완료
+            st.markdown("#### 🚀 시스템 추천 디자인 무드 가이드")
             st.image(f"https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop", 
-                     caption="[시스템 추천 디자인 무드 가이드라인 예시안]", use_container_width=True)
+                     caption="[시스템 추천 가이드라인 예시안]", use_container_width=True)
 
 
 # --- 탭 2: 전체 히스토리 보관함 ---
