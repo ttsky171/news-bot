@@ -38,28 +38,29 @@ def get_history_files():
 # [🛠️ 수신 엔진] 우체통에서 데이터를 직접 뽑아오는 최신 엔진
 # -------------------------------------------------------------
 def load_extension_data():
-    """인터넷 우체통(JSONBin)에서 확장 프로그램이 던진 데이터를 실시간으로 가져옴"""
+    import requests # 파이썬의 표준 데이터 통신 라이브러리 사용
+    
     BIN_ID = "6a0c24886610dd3ae86c19cd"
     MASTER_KEY = "$2a$10$XJlSzhQ1AoOvMQqIH95KOeLDbr7ohp4ocKXh2V3iAJxHW.QvAnOm6"
     url = f"https://api.jsonbin.io/v3/b/{BIN_ID}/latest"
+    headers = {"X-Master-Key": MASTER_KEY}
     
     try:
-        req = urllib.request.Request(url, headers={"X-Master-Key": MASTER_KEY})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            # 디버깅용: 데이터를 그대로 화면에 찍어보자 (나중에 지워도 됨)
-            print("우체통에서 읽은 데이터:", res_data) 
-            
-            # record가 있으면 꺼내고, 없으면 전체 데이터를 사용
-            actual_data = res_data.get("record", res_data)
-            
+        # 10초 타임아웃으로 안전하게 통신
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            res_data = response.json()
+            # JSONBin 데이터 꺼내기
+            actual_data = res_data.get("record", {})
             return (
-                actual_data.get("keywords", ["데이터가", "없음"]), 
+                actual_data.get("keywords", []), 
                 actual_data.get("metadata", {}), 
-                actual_data.get("updated_at", "동기화 실패")
+                actual_data.get("updated_at", "동기화 완료")
             )
+        else:
+            return [], {}, f"서버 오류: {response.status_code}"
     except Exception as e:
-        return ["에러발생", str(e)], {}, "연결 오류"
+        return [], {}, f"연결 오류: {str(e)}"
 
 # API Key 저장/불러오기
 if "api_key_saved" not in st.session_state:
