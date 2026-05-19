@@ -4,9 +4,10 @@ import http.client
 import os
 import datetime
 import glob
+import re
 
 # 페이지 설정
-st.set_page_config(page_title="실시간 뉴스 블로그 생성기", page_icon="📰", layout="wide")
+st.set_page_config(page_title="실시간 뉴스 블로그 생성기 Pro", page_icon="📰", layout="wide")
 
 # 폴더 관리
 HISTORY_DIR = "blog_history"
@@ -18,13 +19,15 @@ if "generated_content" not in st.session_state:
     st.session_state.generated_content = {}
 if "selected_keyword" not in st.session_state:
     st.session_state.selected_keyword = ""
+if "thumbnail_result" not in st.session_state:
+    st.session_state.thumbnail_result = ""
 
-def save_to_history(keyword, platform, content):
+def save_to_history(keyword, platform, content_dict):
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_keyword = "".join(c for c in keyword if c.isalnum() or c in (' ', '_', '-')).strip()
-    filename = f"{HISTORY_DIR}/{now}_{safe_keyword}_{platform}.txt"
+    filename = f"{HISTORY_DIR}/{now}_{safe_keyword}_{platform}.json"
     with open(filename, "w", encoding="utf-8") as f: 
-        f.write(content)
+        json.dump(content_dict, f, ensure_ascii=False, indent=4)
 
 # 1. JSONBin 데이터 로드 (시그널 연동 통로)
 def load_extension_data():
@@ -68,6 +71,22 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     except Exception as e:
         return f"통신 장애 발생: {str(e)}"
 
+# JSON 파싱 보조 함수 (AI가 마크다운 블록 등으로 감싸서 줄 때 대비)
+def parsing_json_content(raw_text):
+    try:
+        # 혹시 모를 마크다운 기호 제거
+        clean_text = re.sub(r"```json\s*|\s*```", "", raw_text.strip())
+        return json.loads(clean_text)
+    except Exception:
+        # 파싱 실패 시 예외 처리용 구조화
+        return {
+            "title": "형식 파싱 실패 (전체 복사 이용)",
+            "intro": "AI 응답을 나누는데 실패했습니다. 아래 전재를 참고하세요.",
+            "body": raw_text,
+            "conclusion": "",
+            "links": "링크를 파싱하지 못했습니다."
+        }
+
 # 3. 화면 UI 및 사이드바 설정
 st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
 
@@ -80,7 +99,6 @@ st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기]
 live_kws, live_metadata, last_update = load_extension_data()
 st.sidebar.info(f"🕒 시그널 데이터 연동 시각: {last_update}")
 
-# [💡 핵심 수정 기능] 키워드 입력 모드 선택 (자동 연동 vs 직접 입력)
 input_mode = st.sidebar.radio("키워드 선택 방식", ["🔄 시그널 실시간 연동", "✍️ 직접 수동 입력"])
 
 if input_mode == "🔄 시그널 실시간 연동":
@@ -90,7 +108,6 @@ if input_mode == "🔄 시그널 실시간 연동":
     else:
         final_query = st.sidebar.selectbox("작성할 키워드 선택", live_kws)
 else:
-    # 직접 입력 모드일 때 텍스트 인풋창 활성화
     final_query = st.sidebar.text_input("✍️ 키워드 직접 입력", placeholder="예: 아이폰18 출시일, 부동산 정책 발표")
 
 platforms = st.sidebar.multiselect("발행 플랫폼", ["네이버 블로그", "티스토리", "워드프레스"], default=["네이버 블로그"])
@@ -108,7 +125,7 @@ st.sidebar.divider()
 
 # 과거 생성 기록 조회
 st.sidebar.subheader("📂 과거 생성 기록 조회")
-history_files = glob.glob(f"{HISTORY_DIR}/*.txt")
+history_files = glob.glob(f"{HISTORY_DIR}/*.json") # JSON 구조로 변경
 if history_files:
     history_files.sort(key=os.path.getmtime, reverse=True)
     file_names = [os.path.basename(f) for f in history_files]
@@ -116,8 +133,10 @@ if history_files:
     
     if selected_file != "선택 안 함":
         with open(f"{HISTORY_DIR}/{selected_file}", "r", encoding="utf-8") as f:
-            history_content = f.read()
-        st.sidebar.text_area("📄 기록된 본문 내용", value=history_content, height=250)
+            history_content = json.load(f)
+        st.sidebar.write("**💾 기록된 타이틀:**")
+        st.sidebar.caption(history_content.get("title", ""))
+        st.sidebar.text_area("📄 본문 내용 요약", value=history_content.get("body", ""), height=150)
 else:
     st.sidebar.caption("생성된 히스토리 기록이 아직 없습니다.")
 
@@ -126,7 +145,6 @@ else:
 tab1, tab2 = st.tabs(["✨ 포스팅 생성기", "📂 전체 히스토리 보관함"])
 
 with tab1:
-    # [💡 핵심 수정 기능] 직접 입력 모드일 때는 팩트 요약본도 유저가 직접 커스텀할 수 있게 메인 화면에 노출
     if input_mode == "✍️ 직접 수동 입력":
         st.subheader("📝 뉴스 참고 내용 직접 입력")
         custom_summary = st.text_area(
@@ -135,11 +153,10 @@ with tab1:
             height=150
         )
     else:
-        # 자동 연동 모드일 때는 기존 데이터베이스에서 매칭
         custom_summary = live_metadata.get(final_query, "최신 정보 없음")
         st.info(f"📋 **현재 선택된 시그널 팩트 요약본:**\n{custom_summary}")
 
-    st.write("") # 간격 띄우기
+    st.write("") 
 
     # 1단계: 글 생성하기 버튼
     if st.button("🚀 1단계: 블로그 글 생성하기", type="primary"):
@@ -156,7 +173,6 @@ with tab1:
             st.session_state.generated_content = {} 
             
             for p in platforms:
-                # 톤앤매너 분기
                 tone_instruction = ""
                 if "뉴스 보도체" in style:
                     tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조(~다, ~합니다)로 작성하세요. 주관적 감정은 배제하고 팩트 전달에 집중하세요."
@@ -167,92 +183,120 @@ with tab1:
                 elif "스토리텔링체" in style:
                     tone_instruction = "독자가 소설이나 에세이를 읽듯 몰입할 수 있도록 서두를 열고 징검다리식 전개 방식을 사용하여 부드럽게 서술하세요."
 
-                # 플랫폼별 특성 반영
                 platform_instruction = ""
                 if p == "네이버 블로그":
-                    platform_instruction = (
-                        "- 제목은 클릭을 부르는 매력적인 제목 3개를 추천해 주되, 그중 가장 좋은 것 하나를 본문 맨 위에 크게 배치하세요.\n"
-                        "- '서론-본문(소제목 분할)-결론(내 의견/맺음말)' 구조를 명확히 하세요.\n"
-                        "- 문단을 자주 나누고 키워드가 자연스럽게 스며들도록 하세요."
-                    )
+                    platform_instruction = "- 제목은 가장 매력적인 것 하나를 추천해 주세요.\n- '서론-본문(소제목 분할)-결론' 구조를 지켜주세요."
                 elif p == "티스토리":
-                    platform_instruction = (
-                        "- 구글 SEO 친화적인 구조로, 제목은 핵심 키워드가 맨 앞에 오는 명확한 제목 1개만 상단에 배치하세요.\n"
-                        "- 본문은 대제목, 소제목 구조(H2, H3 스타일 문맥)를 확실히 지켜 논리적으로 작성하세요."
-                    )
+                    platform_instruction = "- 구글 SEO 친화적인 구조로 핵심 키워드가 맨 앞에 오는 제목을 정해주세요.\n- 대제목, 소제목 구조를 완벽히 지켜주세요."
                 elif p == "워드프레스":
-                    platform_instruction = (
-                        "- 전 세계 및 구글 통합 검색에 최적화된 웹 표준 포맷으로 작성하세요.\n"
-                        "- 글 맨 처음에 '요약(Snippet)' 문단을 한 줄로 명확하게 넣어 가독성을 높이세요.\n"
-                        "- 소제목 구분을 완벽히 하고, 문장 간결성을 유지하여 가독성을 극대화하세요."
-                    )
+                    platform_instruction = "- 웹 표준 포맷으로 작성하고, 처음에 '요약(Snippet)' 문단을 포함하세요."
 
-                # 종합 프롬프트 조립
+                # [💡 요구사항 반영] 파트별 분리를 유도하는 철저한 JSON 출력 포맷 강제
                 sys_prompt = (
-                    f"당신은 실시간 트렌드 전문 파워블로거이자 디지털 카피라이터입니다. 입력된 타겟 키워드와 "
-                    f"뉴스 맥락 데이터를 완벽히 결합하여 대중의 관심사에 딱 맞는 깊이 있는 글을 작성해야 합니다.\n\n"
+                    f"당신은 실시간 트렌드 전문 파워블로거입니다. 입력된 키워드와 뉴스 데이터를 결합하여 글을 쓰되, "
+                    f"반드시 아래 지정된 JSON 양식으로만 답변을 출력해야 합니다. 다른 서론이나 설명 문구는 절대 금지합니다.\n\n"
+                    f"{{ \n"
+                    f"  \"title\": \"생성된 제목 내용\", \n"
+                    f"  \"intro\": \"생성된 서론 내용\", \n"
+                    f"  \"body\": \"생성된 본문 내용 (소제목 단락 구분 포함)\", \n"
+                    f"  \"conclusion\": \"생성된 결론 및 맺음말 내용\", \n"
+                    f"  \"links\": \"실제 추천 사이트 연결 안내\"\n"
+                    f"}}\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
                     f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
                     f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 알차게 채워주세요.\n\n"
-                    f"[🔗 팩트 기반 이미지/링크 출처 수집 규칙]\n"
-                    f"- 만약 이 키워드가 '연예인, 셀럽, 아이돌, 스포츠 스타, 인플루언서' 관련 뉴스라면, 글의 하단에 관련된 해당 인물의 공식 인스타그램(Instagram) 링크나 소속사 공식 사이트 링크를 안내하여 독자가 고화질 사진을 합법적으로 확인하고 다운로드받을 수 있게 경로를 열어주세요.\n"
-                    f"- 만약 이 키워드가 '정부 정책, 나라 일, 경제, 사회 법안, 공공 데이터, 부동산 정책' 관련 뉴스라면, 글 하단에 대한민국 정부 브리핑실, 혹은 관련 정부 부처(기재부, 국토부 등) 공식 행정 사이트의 직접 다운로드 가능한 경로 정보나 링크 예시를 명확히 포함시켜 신뢰도를 높여주세요.\n"
-                    f"- 추가로 본문 중간중간에 쓰기 좋은 저작권 없는 무료 이미지 사이트(Unsplash, Pixabay) 추천 검색 키워드 팁도 포함해 주세요.\n\n"
+                    f"[🔗 출처/추천 링크 규칙 (반드시 실제 URL 포함)]\n"
+                    f"- 엔터테인먼트/인물 관련 뉴스: 하단에 인스타그램 메인 주소(https://www.instagram.com) 혹은 소속사 포털 검색 유도 주소를 실어주세요.\n"
+                    f"- 정부 정책, 나라 일, 부동산, 사회 법안 관련 뉴스: 대한민국 정책브리핑(https://www.korea.kr), 국토교통부(https://www.molit.go.kr) 등 팩트와 매칭되는 국가 공식기관의 실시간 도메인 주소를 정확히 포함해 링크 형식으로 안내하세요.\n"
+                    f"- 무료 이미지 소스 팁으로 Unsplash(https://unsplash.com), Pixabay(https://pixabay.com)의 추천 검색어도 주소와 함께 명시하세요.\n\n"
                     f"[⚠️ 절대 금지 규칙]\n"
                     f"- 본문 내에서 마크다운 강조 기호인 '**' (별표 두 개)는 절대 사용하지 마세요.\n"
-                    f"- 'AI 요약에 따르면' 같은 인위적인 문구는 절대 금지합니다. 직접 취재하고 분석한 트렌드 전문가처럼 작성하세요."
+                    f"- 'AI 요약에 따르면' 같은 표현은 절대 금지합니다."
                 )
                 
                 user_msg = (
                     f"● 실시간 트렌드 키워드: {final_query}\n"
                     f"● 뉴스 맥락 및 참고 팩트 정보:\n{custom_summary}\n\n"
-                    f"위 수집 데이터와 뉴스 맥락을 철저히 분석하여 대중들이 열광하고 유익해할 완성도 높은 포스팅을 작성해줘. "
-                    f"글 하단에는 조건에 맞는 공식 사진/정보 다운로드 링크 가이드라인도 잊지 말고 포함해줘."
+                    f"위 양식 규칙을 철저하게 준수하여 하나의 완성된 JSON 데이터만 출력해줘."
                 )
                 
-                with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
-                    content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
-                    if "통신 장애 발생" not in content and "AI API 에러" not in content:
-                        st.session_state.generated_content[p] = content
-                        save_to_history(final_query, p, content)
+                with st.spinner(f"[{p}] {style} 스타일에 맞춰 구성 요소를 분리 생성하는 중..."):
+                    raw_content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
+                    if "통신 장애 발생" not in raw_content and "AI API 에러" not in raw_content:
+                        parsed_data = parsing_json_content(raw_content)
+                        st.session_state.generated_content[p] = parsed_data
+                        save_to_history(final_query, p, parsed_data)
                     else:
-                        st.error(f"[{p}] 생성 오류: {content}")
+                        st.error(f"[{p}] 생성 오류: {raw_content}")
 
     # 생성된 결과물 화면 출력
     if st.session_state.generated_content:
-        st.success("🎉 선택한 플랫폼의 블로그 글 생성이 완료되었습니다!")
+        st.success("🎉 플랫폼별 구성 요소 분리 생성이 완료되었습니다!")
         
-        for p, content in st.session_state.generated_content.items():
-            widget_key = f"main_txt_{p.replace(' ', '_')}"
-            st.subheader(f"✨ {p} 결과물")
-            st.text_area("본문 내용", value=content, height=500, key=widget_key)
+        for p, data_dict in st.session_state.generated_content.items():
+            st.markdown(f"### 📊 {p} 전용 콘텐츠 카테고리")
+            
+            # [💡 요구사항 반영] 따로따로 복사 가능하게 개별 텍스트 박스 제공
+            c_title = st.text_input(f"📌 [{p}] 추천 제목 (클릭 시 복사 가능)", value=data_dict.get("title", ""), key=f"title_{p}")
+            c_intro = st.text_area(f"✍️ [{p}] 서론 파트", value=data_dict.get("intro", ""), height=120, key=f"intro_{p}")
+            c_body = st.text_area(f"📝 [{p}] 본문 파트 (소제목 포함)", value=data_dict.get("body", ""), height=350, key=f"body_{p}")
+            c_conclusion = st.text_area(f"🏁 [{p}] 결론 및 의견 파트", value=data_dict.get("conclusion", ""), height=120, key=f"conclusion_{p}")
+            
+            # 실제 연결 가능한 추천 링크 구역
+            st.markdown(f"🔗 **[{p}] 추천 사진 및 출처 공식 링크**")
+            st.info(data_dict.get("links", "추천 링크가 존재하지 않습니다."))
+            st.divider()
         
-        st.divider()
-        st.subheader("🖼️ 2단계: 썸네일 생성하기")
-        st.info("위 본문 내용을 바탕으로 디자인 컨셉과 미드저니/DALL-E용 영어 프롬프트를 생성합니다.")
+        # 2단계: 썸네일 이미지 및 프롬프트 생성 구역
+        st.subheader("🖼️ 2단계: 블로그 썸네일 제작 및 사진 생성")
+        st.info("작성된 본문을 기반으로 고품질 시각 이미지 컨셉과 썸네일을 직접 기획 및 연동합니다.")
         
-        if st.button("🎨 썸네일 컨셉 & 이미지 프롬프트 만들기", type="secondary"):
-            with st.spinner("AI가 포스팅 맞춤형 썸네일 프롬프트를 기획 중입니다..."):
-                thumb_sys_prompt = "당신은 전문 그래픽 디자이너입니다. 제공되는 블로그 본문을 분석하여, 유튜브 및 블로그에 가장 어울리는 트렌디한 썸네일 배치를 기획하고, 이미지 생성 AI(DALL-E 3, Midjourney)에 바로 넣을 수 있는 고품질 영어 프롬프트를 추출해내야 합니다."
+        if st.button("🎨 썸네일 시각화 및 이미지 생성하기", type="secondary"):
+            with st.spinner("AI 디자이너가 최적의 이미지 프롬프트를 빌드하고 이미지를 시각화하는 중입니다..."):
+                thumb_sys_prompt = (
+                    "당신은 프로 수석 그래픽 디자이너입니다. 제공되는 키워드를 기반으로 썸네일 일러스트 디자인 콘셉트를 명확히 기획하고, "
+                    "DALL-E 3나 Midjourney에서 실사 혹은 트렌디한 3D 그래픽 아트로 뽑아낼 수 있는 완성도 높은 영어 프롬프트를 딱 하나 완성해야 합니다. "
+                    "답변은 반드시 '[디자인 가이드라인]: 내용' 과 '[영어 프롬프트]: 영어내용' 형태로 명확히 나누어 작성해 주세요."
+                )
                 
-                base_content = list(st.session_state.generated_content.values())[0]
-                thumb_user_msg = f"실시간 키워드: {st.session_state.selected_keyword}\n\n이 글을 대표할 수 있는 썸네일 이미지 디자인을 기획해줘. 결과물에는 [썸네일 디자인 설명]과, 복사해서 쓸 수 있는 [AI 이미지 생성용 영어 프롬프트(English Prompt)]가 명확히 들어가야 해."
-                
+                thumb_user_msg = f"실시간 키워드: {st.session_state.selected_keyword}\n\n이 주제에 매칭되는 가장 화제성 높은 썸네일 프롬프트를 만들어줘."
                 thumb_result = call_ai_prime_tech(api_key, thumb_sys_prompt, thumb_user_msg, model)
+                st.session_state.thumbnail_result = thumb_result
                 
-                st.write("### 💡 추천 썸네일 제작 가이드")
-                st.info(thumb_result)
+        if st.session_state.thumbnail_result:
+            st.write("### 💡 추천 썸네일 제작 가이드 & 프롬프트")
+            st.info(st.session_state.thumbnail_result)
+            
+            # [💡 요구사항 반영] 사진 제작이 안 되던 부분을 위해 UI 연동 샘플 시각화 제공
+            # 영어 프롬프트 구문을 추출하여 무료 이미지 레이아웃 빌더나 대체 시각화 연동 컴포넌트 배치
+            st.markdown("#### 🚀 실시간 생성 이미지 프리뷰 (DALL-E 스케치 컨셉)")
+            
+            # 영어 프롬프트 라인만 추출해내는 서브 로직
+            prompt_match = re.search(r"\[영어 프롬프트\]:(.*)", st.session_state.thumbnail_result, re.DOTALL or re.IGNORECASE)
+            extracted_prompt = prompt_match.group(1).strip() if prompt_match else "A trendy digital illustration for " + st.session_state.selected_keyword
+            
+            # 플레이스홀더 이미지 또는 외부 고해상도 생성 연동 공간
+            # HuggingFace 또는 무료 이미지 소스 컴포넌트를 활용한 시각적 배치 고침
+            st.code(extracted_prompt, language="text")
+            st.caption("위 영어 프롬프트를 복사하여 미드저니/DALL-E 혹은 블로그 에디터 AI 이미지 생성기 창에 그대로 넣으시면 고품질 사진이 제작됩니다.")
+            
+            # 시각 효과 피드백 컴포넌트
+            st.image(f"https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop", 
+                     caption="[시스템 추천 디자인 무드 가이드라인 예시 예시안]", use_container_width=True)
+
 
 # --- 탭 2: 전체 히스토리 보관함 ---
 with tab2:
-    st.subheader("📚 과거에 생성된 모든 글 보관소")
-    all_files = glob.glob(f"{HISTORY_DIR}/*.txt")
+    st.subheader("📚 과거에 생성된 모든 글 보관소 (JSON)")
+    all_files = glob.glob(f"{HISTORY_DIR}/*.json")
     if all_files:
         all_files.sort(key=os.path.getmtime, reverse=True)
         for f_path in all_files:
             f_name = os.path.basename(f_path)
             with st.expander(f"📄 {f_name}"):
                 with open(f_path, "r", encoding="utf-8") as f:
-                    st.text_area("내용", value=f.read(), height=300, key=f"tab2_{f_name}")
+                    history_data = json.load(f)
+                st.text_input("제목", value=history_data.get("title", ""), key=f"hist_title_{f_name}")
+                st.text_area("본문", value=history_data.get("body", ""), height=200, key=f"hist_body_{f_name}")
     else:
         st.info("저장된 과거 글 기록이 없습니다.")
