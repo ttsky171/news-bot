@@ -19,8 +19,6 @@ if "generated_content" not in st.session_state:
     st.session_state.generated_content = {}
 if "selected_keyword" not in st.session_state:
     st.session_state.selected_keyword = ""
-if "thumbnail_result" not in st.session_state:
-    st.session_state.thumbnail_result = ""
 
 def save_to_history(keyword, platform, content):
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -64,7 +62,7 @@ def load_extension_data():
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
-# [🔥 2. AI 호출 엔진 만능 파싱 구조로 전면 개편]
+# 2. AI 호출 엔진
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -83,7 +81,6 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         
         result_json = json.loads(data)
         
-        # 구조 분석 1단계: 표준적이고 깊은 구조 형태 파싱 (기존 방식 보완)
         if "content" in result_json:
             content_data = result_json["content"]
             if isinstance(content_data, list) and len(content_data) > 0:
@@ -94,7 +91,6 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
             elif isinstance(content_data, str):
                 return content_data
         
-        # 구조 분석 2단계: OpenAI 스타일 또는 일반적인 text/choices 형태 파싱 백업
         if "choices" in result_json and len(result_json["choices"]) > 0:
             choice = result_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -108,7 +104,6 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         if "error" in result_json:
             return f"AI API 에러 발생: {result_json['error']}"
             
-        # 구조 분석 3단계 (최후의 보루): 어떻게든 데이터가 왔다면 JSON 문자열 전체라도 화면에 덤프
         if data.strip():
             return f"⚠️ [안내: 규격 외 응답 수신] 데이터 원본을 출력합니다:\n\n{data}"
             
@@ -192,7 +187,7 @@ with tab1:
     st.write("") 
 
     # 1단계: 글 생성하기 버튼
-    if st.button("🚀 1단계: 블로그 글 생성하기", type="primary"):
+    if st.button("🚀 블로그 글 생성하기", type="primary"):
         if not api_key:
             st.error("API 키를 입력하세요.")
         elif not final_query or final_query.strip() == "":
@@ -224,13 +219,17 @@ with tab1:
                 elif p == "워드프레스":
                     platform_instruction = "- 글 맨 처음에 '요약(Snippet)' 문단을 한 줄로 명확하게 넣어 가독성을 높이세요.\n- 소제목 구분을 완벽히 하고 문장을 간결하게 작성하세요."
 
+                # [🔥 프롬프트 대폭 전면 수정: 이미지/링크 완전 제외 + 스마트블록 타겟 태그 20개 규칙 주입]
                 sys_prompt = (
-                    f"당신은 실시간 트렌드 전문 파워블로거이자 디지털 카피라이터입니다. 입력된 타겟 키워드와 뉴스 데이터를 결합하여 완성도 높은 포스팅을 작성하세요.\n\n"
+                    f"당신은 네이버의 스마트블록(C-Rank, DIA+) 알고리즘을 꿰뚫고 있는 실시간 트렌드 전문 파워블로거입니다. "
+                    f"입력된 키워드와 뉴스 데이터를 분석하여 완벽한 상위 노출용 포스팅을 작성하세요.\n\n"
                     f"⚠️ [작성 안내]\n"
-                    f"- 본문 맨 처음에 알맞은 제목을 크게 적어주고, 이어서 서론, 본문(소제목 포함), 결론을 구분 기호 없이 물 흐르듯 한 번에 작성해 주세요.\n"
-                    f"- 글의 맨 마지막 줄(결론 뒤)에는 다음과 같이 번호를 매겨 사진 활용 및 추천 링크 정보를 단 두 줄로만 추가해 주세요.\n"
-                    f"  1. 관련 공식 출처: (뉴스 맥락에 맞는 기관명 또는 SNS 주소 명시)\n"
-                    f"  2. 추천 무료 이미지 소스: Unsplash (https://unsplash.com), Pixabay (https://pixabay.com)\n\n"
+                    f"- 본문 맨 처음에 알맞은 제목을 크게 적어주고, 이어서 서론, 본문(소제목 포함), 결론을 구분 기호 없이 한 번에 작성해 주세요.\n"
+                    f"- 이미지나 외부 링크 추천 관련 멘트는 절대로 적지 마세요.\n\n"
+                    f"🏷️ [스마트블록 최적화 태그 생성 규칙 - 필수]\n"
+                    f"- 결론이 끝난 뒤 맨 마지막 줄에, 네이버 스마트블록 세부 분류에 노출되기 적합한 **연관 핵심 태그를 반드시 20개 이상** 한 줄로 이어서 작성하세요.\n"
+                    f"- 태그는 대중의 검색 의도, 파생 키워드, 타겟층(예: #청년, #직장인 등)이 골고루 조합된 고품질 키워드로 구성해야 합니다.\n"
+                    f"- 출력 형식 예시: #키워드1 #키워드2 #세부키워드3 ... (20개 이상 채울 것)\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
                     f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
                     f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 정보를 축약하지 말고 깊이 있게 가득 채워주세요.\n\n"
@@ -242,7 +241,7 @@ with tab1:
                 user_msg = (
                     f"● 실시간 트렌드 키워드: {final_query}\n"
                     f"● 뉴스 맥락 및 참고 팩트 정보:\n{custom_summary}\n\n"
-                    f"위 규칙들을 토대로 블로그 글을 처음부터 끝까지 하나의 완성된 텍스트로 축약 없이 길게 작성해줘."
+                    f"위 규칙들을 토대로 블로그 글을 작성하고, 맨 밑에 스마트블록 노출용 태그 20개 이상을 반드시 포함시켜줘."
                 )
                 
                 with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
@@ -257,31 +256,8 @@ with tab1:
         st.success("🎉 블로그 글 생성이 완료되었습니다!")
         for p, full_content in st.session_state.generated_content.items():
             st.subheader(f"✨ {p} 결과물")
-            st.text_area("📋 제목 + 서론 + 본문 + 결론 + 추천 링크 (통째로 복사해서 사용하세요)", value=full_content, height=600, key=f"body_area_{p}")
+            st.text_area("📋 제목 + 본문 + 스마트블록 최적화 태그 20개+ (통째로 복사해서 사용하세요)", value=full_content, height=650, key=f"body_area_{p}")
             st.divider()
-        
-        st.subheader("🖼️ 2단계: 블로그 썸네일 제작 및 사진 프리뷰")
-        st.info("작성된 본문을 기반으로 미드저니/DALL-E용 영어 프롬프트를 추출하고 매칭 이미지를 시각화합니다.")
-        
-        if st.button("🎨 썸네일 시각화 및 이미지 생성하기", type="secondary"):
-            with st.spinner("AI 디자이너가 최적의 이미지 프롬프트를 빌드하고 이미지를 시각화하는 중입니다..."):
-                thumb_sys_prompt = (
-                    "당신은 프로 수석 그래픽 디자이너입니다. 제공되는 키워드를 기반으로 썸네일 일러스트 디자인 콘셉트를 명확히 기획하고, "
-                    "DALL-E 3나 Midjourney에서 실사 혹은 트렌디한 3D 그래픽 아트로 뽑아낼 수 있는 완성도 높은 영어 프롬프트를 딱 하나 완성해야 합니다. "
-                    "출력은 딴 소리 없이 영어 프롬프트 한 문장으로만 간단하게 작성해 주세요."
-                )
-                thumb_user_msg = f"실시간 키워드: {st.session_state.selected_keyword}"
-                thumb_result = call_ai_prime_tech(api_key, thumb_sys_prompt, thumb_user_msg, model)
-                st.session_state.thumbnail_result = thumb_result
-                
-        if st.session_state.thumbnail_result:
-            st.write("### 💡 AI 이미지 생성용 추천 영어 프롬프트")
-            st.code(st.session_state.thumbnail_result, language="text")
-            st.caption("위 영어 프롬프트를 복사하여 이미지 생성 AI 창에 그대로 넣으시면 고품질 사진이 제작됩니다.")
-            
-            st.markdown("#### 🚀 시스템 추천 디자인 무드 가이드")
-            st.image(f"https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop", 
-                     caption="[시스템 추천 가이드라인 예시안]", use_container_width=True)
 
 # --- 탭 2: 전체 히스토리 보관함 ---
 with tab2:
