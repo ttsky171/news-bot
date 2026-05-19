@@ -29,13 +29,11 @@ def save_to_history(keyword, platform, content):
     with open(filename, "w", encoding="utf-8") as f: 
         f.write(content)
 
-# [🔥 1. 실시간 키워드 연동 엔진 전면 개편]
+# 1. JSONBin 데이터 로드 (시그널 연동 통로)
 def load_extension_data():
-    # 백업용 기본 키워드 세트 (API가 완전히 죽었을 때 작동하는 안전장치)
     fallback_keywords = ["아이폰18 출시일", "부동산 주택 정책 발표", "나는솔로 결혼 소식", "국내 주식 트렌드", "주말 날씨 전망"]
     fallback_metadata = {k: f"{k} 관련 최신 트렌드 및 실시간 이슈 분석 뉴스입니다." for k in fallback_keywords}
     
-    # 대안 1: JSONBin 연동 시도
     BIN_ID = "6a0c24886610dd3ae86c19cd"
     MASTER_KEY = "$2a$10$XJlSzhQ1AoOvMQqIH95KOeLDbr7ohp4ocKXh2V3iAJxHW.QvAnOm6"
     try:
@@ -49,16 +47,13 @@ def load_extension_data():
             if kws:
                 return kws, meta, actual.get("updated_at", "실시간 연동 완료")
     except Exception:
-        pass # JSONBin 실패 시 다음 단계(Signal 직접 연동)로 이동
+        pass
 
-    # 대안 2: Signal 실시간 오픈 API 직접 크롤링/연동 시도
     try:
-        # 시그널 bz의 오픈 트렌드 데이터 주소
         signal_url = "https://api.signal.bz/news/realtime" 
         req = urllib.request.Request(signal_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
             signal_data = json.loads(response.read().decode("utf-8"))
-            # 대중적인 실시간 키워드 배열 파싱 추출
             kws = [item.get("keyword") for item in signal_data.get("top_keywords", []) if item.get("keyword")]
             if kws:
                 meta = {k: f"실시간 시그널 트렌드 핫이슈 키워드 '{k}'에 대한 속보 및 대중 관심사 분석 정보입니다." for k in kws}
@@ -66,7 +61,6 @@ def load_extension_data():
     except Exception:
         pass
 
-    # 모두 실패 시 안전하게 백업 데이터 반환 (오류로 멈추는 현상 방지)
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
@@ -106,14 +100,12 @@ model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus
 
 st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기](https://signal.bz/)")
 
-# 수정된 안전 연동 로직 호출
 live_kws, live_metadata, last_update = load_extension_data()
 st.sidebar.info(f"🕒 데이터 연동 상태: {last_update}")
 
 input_mode = st.sidebar.radio("키워드 선택 방식", ["🔄 시그널 실시간 연동", "✍️ 직접 수동 입력"])
 
 if input_mode == "🔄 시그널 실시간 연동":
-    # [💡 핵심 수정] 리스트가 비어있어 셀렉트박스가 깨지는 현상 차단
     if not live_kws:
         st.sidebar.warning("연동 대기 중입니다. 수동 입력을 이용해 주세요.")
         final_query = ""
@@ -131,7 +123,13 @@ style = st.sidebar.selectbox("글 스타일", [
     "✍️ 스토리텔링체 (부드러운 이야기 형식, 몰입감)"
 ])
 
-length_option = st.sidebar.selectbox("목표 글자 수", ["공백 제외 1,000자 내외", "공백 제외 1,500자 내외", "공백 제외 2,000자 이상(상세히)"])
+# [💡 핵심 수정] 요구사항에 맞춰 글자 수 옵션 전면 개편
+length_option = st.sidebar.selectbox("목표 글자 수", [
+    "공백 제외 1,500자 내외 (기본 분량)", 
+    "공백 제외 2,000자 내외 (상세한 포스팅)", 
+    "공백 제외 2,500자 이상 (전문적인 분석)", 
+    "공백 제외 3,000자 이상 (초고도 정보성)"
+])
 
 st.sidebar.divider()
 
@@ -210,7 +208,7 @@ with tab1:
                     f"  2. 추천 무료 이미지 소스: Unsplash (https://unsplash.com), Pixabay (https://pixabay.com)\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
                     f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
-                    f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 알차게 채워주세요.\n\n"
+                    f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 정보를 축약하지 말고 깊이 있게 가득 채워주세요.\n\n"
                     f"[⚠️ 절대 금지 규칙]\n"
                     f"- 본문 내에서 마크다운 강조 기호인 '**' (별표 두 개)는 절대 사용하지 마세요.\n"
                     f"- 'AI 요약에 따르면' 같은 인위적인 문구는 절대 금지합니다."
@@ -219,10 +217,10 @@ with tab1:
                 user_msg = (
                     f"● 실시간 트렌드 키워드: {final_query}\n"
                     f"● 뉴스 맥락 및 참고 팩트 정보:\n{custom_summary}\n\n"
-                    f"위 규칙들을 토대로 블로그 글을 처음부터 끝까지 하나의 완성된 텍스트로 쭉 작성해줘."
+                    f"위 규칙들을 토대로 블로그 글을 처음부터 끝까지 하나의 완성된 텍스트로 축약 없이 길게 작성해줘."
                 )
                 
-                with st.spinner(f"[{p}] {style} 스타시에 맞춰 글을 생성하는 중..."):
+                with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
                     content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
                     if "통신 장애 발생" not in content and "AI API 에러" not in content:
                         st.session_state.generated_content[p] = content
