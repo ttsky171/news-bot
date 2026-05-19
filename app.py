@@ -94,36 +94,32 @@ length = st.sidebar.selectbox("📏 글 길이", ["짧게 (500자)", "보통 (10
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     
-    # [★ 초비상 방어 설정] 0.7x 우회 채널용 가상 페이로드 빌드
-    # 대행사 서버가 OpenAI나 구형 프록시 규격으로 랩핑했을 확률에 대응하여 구조를 가장 심플하게 압축합니다.
     payload = json.dumps({
         "model": model_name,
-        "max_tokens": 2500, 
+        "max_tokens": 3500,  # 분량이 길게 나올 수 있도록 맥스 토큰을 넉넉하게 확장
         "messages": [
-            {"role": "user", "content": f"[System 지시사항: {sys_prompt}]\n\n본문 작성 요청 주제: {user_msg}"}
+            {"role": "user", "content": f"[System 규칙: {sys_prompt}]\n\n요청 과제: {user_msg}"}
         ]
     })
     
-    # 0.7x 채널에서 충돌을 일으키는 anthropic-version 헤더 제거하고 대중적인 베이직 헤더만 전송
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {key}'
     }
     
-    # 세 가지 대표적인 프록시 주소 경로를 순서대로 찔러보는 완전 자동 복구 루프 가동
     possible_paths = ["/v1/messages", "/v1/api/v1/messages", "/api/v1/messages"]
     data = b""
     res_status = 0
     
     for path in possible_paths:
-        conn = http.client.HTTPSConnection(host, timeout=45)
+        conn = http.client.HTTPSConnection(host, timeout=60)
         try:
             conn.request("POST", path, payload, headers)
             res = conn.getresponse()
             res_status = res.status
             data = res.read()
             if res_status == 200:
-                break # 성공하면 루프 탈출
+                break
         except:
             pass
         finally:
@@ -134,45 +130,41 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
 
     try:
         result_json = json.loads(data.decode("utf-8"))
-        
-        # 구조 파싱 다각화 (공식형 / 대행사 변형 형태 전부 긁어모으기)
         output_text = ""
         
-        # 1. Claude 표준 배열 구조 검사
         if "content" in result_json:
             c_list = result_json["content"]
             if isinstance(c_list, list):
                 output_text = "".join([b.get("text", "") for b in c_list if isinstance(b, dict) and "text" in b])
             elif isinstance(c_list, dict):
                 output_text = c_list.get("text", "")
-        
-        # 2. OpenAI 가상 변환 규격(choices) 구조 검사 (0.7x 그룹이 주로 쓰는 방식)
         elif "choices" in result_json:
             choices = result_json["choices"]
             if choices and isinstance(choices, list):
-                msg_obj = choices[0].get("message", {})
-                output_text = msg_obj.get("content", "")
+                output_text = choices[0].get("message", {}).get("content", "")
                 
-        # 3. 그 외 다이렉트 텍스트 매핑 검사
         if not output_text.strip() and "text" in str(result_json):
             return f"⚠️ [안전 복구 로직 가동]\n\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
-            
-        if not output_text.strip():
-            return "❌ 서버 연결은 완벽했으나, 0.7x 우회 채널에서 최종 원고 텍스트를 파싱하지 못했습니다. 대행사 사이트에서 API 키의 '그룹'을 배율이 없는 기본형으로 바꿀 수 있는지 확인해 보세요."
             
         return output_text.strip()
     except Exception as e:
         return f"❌ 데이터 분석 오류: {str(e)}"
 
 def get_system_prompt(p, style_desc, len_desc):
+    # [★ 프롬프트 엔진 개조] 별표(**), 화살표 등 AI 티 내는 기호를 원천 차단하고 분량을 강제하는 초강력 가이드라인 주입
     shared = (
-        f"당신은 한국 최고의 블로그 SEO 작가입니다. 주어진 주제와 트렌드를 완벽하게 분석하여 기사 원문 복사 없이 문장을 완전히 새롭게 조합해 독창적인 글을 작성하세요. "
-        f"스타일: {style_desc}, 길이: {len_desc}"
+        f"당신은 이웃들과 친근하게 소통하는 한국의 전문 탑블로거입니다. "
+        f"반드시 다음의 세 가지 작성 규칙을 목숨 걸고 지키세요.\n"
+        f"1. [기호 절대 금지]: 본문에 별표 기호(**), 샵 기호(#), 화살표(▶), 대괄호 등 AI가 작성한 티가 나는 모든 마크다운 서식 문자를 절대로 쓰지 마세요. 강조하고 싶다면 문맥이나 소제목 문장 자체로 강조하세요.\n"
+        f"2. [인간적인 말투 채택]: '~했어요', '~했죠' 같은 기계적인 종결어미를 남발하지 말고, 실제 사람이 대화하듯 '안녕하세요 여러분!', '~인 것 같아요', '~하더라고요' 등 자연스럽고 흡입력 있는 구어체로 작성하세요.\n"
+        f"3. [강제 분량 확장]: 글자 수를 채우기 위해 사건의 상세한 전말, 대중들의 실제 반응(긍정/부정), 앞으로 우리 사회에 미칠 영향과 전망까지 세부 카테고리를 나누어 깊이 있게 서술하세요. 최소 1,200자 이상의 풍성한 장문으로 빌드해야 합니다.\n"
+        f"선택된 스타일: {style_desc}, 요구 길이: {len_desc}"
     )
+    
     prompts = {
-        "워드프레스": f"{shared}\n【워드프레스 전용 - HTML 태그 <h2> 사용】 출력 양식: [제목], [메타 디스크립션], [본문] (중간에 [📷 사진 추천 마크] 3개 삽입)",
-        "네이버 블로그": f"{shared}\n【네이버 블로그 전용 - 구어체 말투 준수】 출력 양식: [제목], [본문] (소제목 ▶ 사용 및 중간에 [📷 사진 추천 마크] 3개 삽입), [해시태그]",
-        "티스토리": f"{shared}\n【티스토리 전용 - 마크다운 ## 사용】 출력 양식: [제목], [본문] (중간에 [📷 사진 추천 마크] 3개 삽입), [FAQ]"
+        "워드프레스": f"{shared}\n【워드프레스용 구조】 기호 없이 깔끔하게 제목, 메타 디스크립션, 그리고 대형 소제목 위주로 본문을 길게 서술하세요. 중간에 [📷 사진 추천 마크]를 넣어주세요.",
+        "네이버 블로그": f"{shared}\n【네이버 블로그용 구조】 이웃에게 인사하며 시작하고, 각 문단이 3~4줄을 넘지 않도록 가독성 좋게 줄바꿈을 자주 하세요. 본문 하단에만 자연스러운 핵심 키워드 태그를 5개 내외로 적어주세요. 본문 한가운데에 특수기호(**, ▶)는 절대 금지입니다.",
+        "티스토리": f"{shared}\n【티스토리용 구조】 깔끔하고 이성적인 톤을 유지하면서, 정보 전달력을 높이기 위해 문단을 세부적으로 쪼개어 장문으로 서술하세요. FAQ 섹션을 기호 없이 추가하세요."
     }
     return prompts.get(p, shared)
 
@@ -187,15 +179,22 @@ if st.sidebar.button("✨ 플랫폼별 블로그 글 생성", type="primary"):
     else:
         results = {}
         for p in platforms:
-            with st.spinner(f"AI({selected_model}) 엔진이 전용 가성비 노드를 통해 '{p}' 원고를 최종 연산 중..."):
+            with st.spinner(f"AI가 인간 모드로 빙의하여 기호를 제거하고 '{p}' 원고를 풍성하게 집필 중입니다..."):
                 sys_p = get_system_prompt(p, style, length)
-                user_m = f"실시간 핵심 키워드인 '{query}' 소식을 바탕으로 블로그 포스팅 원고를 빌드하세요. 본문 중간 적절한 곳에 [📷 사진 추천] 마크를 3개 이상 반드시 기입하세요. 오늘 날짜: {datetime.date.today().strftime('%Y-%m-%d')}"
+                
+                # 유저 프롬프트에서도 기호 삭제와 분량 확보를 재차 압박
+                user_m = (
+                    f"오늘 일어난 실시간 급상승 키워드인 '{query}'에 대한 뉴스 소식을 다룹니다. "
+                    f"단순한 요약에 그치지 말고 관련된 비하인드 스토리와 네티즌들의 여론, 향후 사법적/사회적 파장까지 세밀하게 분석해서 "
+                    f"텍스트 상자 안이 꽉 차도록 아주 길게 작성해 주세요. 본문 어디에도 '**' 나 '▶' 같은 기호가 들어가면 안 됩니다. "
+                    f"오늘 날짜: {datetime.date.today().strftime('%Y-%m-%d')}"
+                )
                 
                 results[p] = call_ai_prime_tech(api_key, sys_p, user_m, selected_model)
         
-        st.success("🎉 블로그 원고 생산 공정이 완료되었습니다!")
+        st.success("🎉 인간형 최적화 블로그 원고 생산이 완료되었습니다!")
         tabs = st.tabs(platforms)
         for idx, p in enumerate(platforms):
             with tabs[idx]:
-                st.markdown(f"### 🖥️ {p} 최적화 포스팅 원고")
-                st.text_area(f"{p} 결과물 (드래그 복사 가능)", value=results.get(p, ""), height=500, key=f"text_area_{p}")
+                st.markdown(f"### 🖥️ {p} 최적화 포스팅 원고 (기호 차단 버전)")
+                st.text_area(f"{p} 결과물 (드래그 복사 가능)", value=results.get(p, ""), height=600, key=f"text_area_{p}")
