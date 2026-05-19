@@ -14,9 +14,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# -------------------------------------------------------------
-# [기능] 브라우저 로컬 스토리지를 이용한 API Key 저장/불러오기 스크립트
-# -------------------------------------------------------------
+# 브라우저 로컬 스토리지를 이용한 API Key 저장/불러오기
 if "api_key_saved" not in st.session_state:
     st.session_state["api_key_saved"] = ""
 
@@ -94,74 +92,87 @@ style = st.sidebar.selectbox("✍️ 글 스타일", ["📰 뉴스 보도체", "
 length = st.sidebar.selectbox("📏 글 길이", ["짧게 (500자)", "보통 (1000자)", "길게 (2000자)"])
 
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
-    # [★ 중요 수정] ANTHROPIC_BASE_URL 규격에 맞게 엔드포인트 경로를 Anthropic 공식 API 주소 형태로 변환합니다.
     host = "aiprimetech.io"
-    path = "/v1/api/v1/messages"  # 프록시 서버들이 공식 SDK 요청을 중계할 때 사용하는 표준 라우팅 경로로 변경
     
+    # [★ 초비상 방어 설정] 0.7x 우회 채널용 가상 페이로드 빌드
+    # 대행사 서버가 OpenAI나 구형 프록시 규격으로 랩핑했을 확률에 대응하여 구조를 가장 심플하게 압축합니다.
     payload = json.dumps({
         "model": model_name,
-        "max_tokens": 3000, 
-        "system": sys_prompt,
-        "messages": [{"role": "user", "content": user_msg}]
+        "max_tokens": 2500, 
+        "messages": [
+            {"role": "user", "content": f"[System 지시사항: {sys_prompt}]\n\n본문 작성 요청 주제: {user_msg}"}
+        ]
     })
     
+    # 0.7x 채널에서 충돌을 일으키는 anthropic-version 헤더 제거하고 대중적인 베이직 헤더만 전송
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': f'Bearer {key}',  # ANTHROPIC_AUTH_TOKEN 역할을 수행
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
+        'Authorization': f'Bearer {key}'
     }
     
-    conn = http.client.HTTPSConnection(host, timeout=60)
-    try:
-        conn.request("POST", path, payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        
-        # 만약 수정된 경로로도 에러(404 등)가 난다면 기존 경로로 재시도하는 자동 백업 로직 탑재
-        if res.status == 404 or res.status == 400:
-            conn.close()
-            conn = http.client.HTTPSConnection(host, timeout=60)
-            conn.request("POST", "/v1/messages", payload, headers)
+    # 세 가지 대표적인 프록시 주소 경로를 순서대로 찔러보는 완전 자동 복구 루프 가동
+    possible_paths = ["/v1/messages", "/v1/api/v1/messages", "/api/v1/messages"]
+    data = b""
+    res_status = 0
+    
+    for path in possible_paths:
+        conn = http.client.HTTPSConnection(host, timeout=45)
+        try:
+            conn.request("POST", path, payload, headers)
             res = conn.getresponse()
+            res_status = res.status
             data = res.read()
+            if res_status == 200:
+                break # 성공하면 루프 탈출
+        except:
+            pass
+        finally:
+            conn.close()
             
-        if res.status != 200:
-            return f"❌ 서버 응답 에러 (HTTP {res.status}): API 키나 충전 잔액을 확인하세요.\n상세 정보: {data.decode('utf-8', errors='ignore')}"
-        
+    if res_status != 200:
+        return f"❌ 대행 서버 통신 실패 (HTTP {res_status}): API 키 그룹이나 잔액을 재점검하세요.\n반환 로그: {data.decode('utf-8', errors='ignore')[:300]}"
+
+    try:
         result_json = json.loads(data.decode("utf-8"))
-        content_list = result_json.get("content", [])
         
+        # 구조 파싱 다각화 (공식형 / 대행사 변형 형태 전부 긁어모으기)
         output_text = ""
         
-        if isinstance(content_list, list):
-            for block in content_list:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    output_text += block.get("text", "")
-        elif isinstance(content_list, dict):
-            output_text = content_list.get("text", "")
+        # 1. Claude 표준 배열 구조 검사
+        if "content" in result_json:
+            c_list = result_json["content"]
+            if isinstance(c_list, list):
+                output_text = "".join([b.get("text", "") for b in c_list if isinstance(b, dict) and "text" in b])
+            elif isinstance(c_list, dict):
+                output_text = c_list.get("text", "")
+        
+        # 2. OpenAI 가상 변환 규격(choices) 구조 검사 (0.7x 그룹이 주로 쓰는 방식)
+        elif "choices" in result_json:
+            choices = result_json["choices"]
+            if choices and isinstance(choices, list):
+                msg_obj = choices[0].get("message", {})
+                output_text = msg_obj.get("content", "")
+                
+        # 3. 그 외 다이렉트 텍스트 매핑 검사
+        if not output_text.strip() and "text" in str(result_json):
+            return f"⚠️ [안전 복구 로직 가동]\n\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
             
         if not output_text.strip():
-            if "text" in str(result_json):
-                return f"⚠️ [우회 복구 성공]\n\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
-            else:
-                return f"❌ 대행 서버 경로 매칭 성공 및 연결 안정화되었으나, 현재 입력된 API 키의 잔액이 부족하거나 모델 권한이 닫혀 있습니다. 대시보드를 확인해 주세요."
-                
+            return "❌ 서버 연결은 완벽했으나, 0.7x 우회 채널에서 최종 원고 텍스트를 파싱하지 못했습니다. 대행사 사이트에서 API 키의 '그룹'을 배율이 없는 기본형으로 바꿀 수 있는지 확인해 보세요."
+            
         return output_text.strip()
     except Exception as e:
-        return f"❌ 통신 예외 발생: {str(e)}"
-    finally:
-        conn.close()
+        return f"❌ 데이터 분석 오류: {str(e)}"
 
 def get_system_prompt(p, style_desc, len_desc):
     shared = (
-        f"당신은 한국 최고의 블로그 SEO 작가입니다. 주어진 주제와 트렌드를 완벽하게 추론하고 분석하여, 기사 원문 복사 없이 문장을 완전히 새롭게 조합해 독창적인 글을 작성하세요. "
+        f"당신은 한국 최고의 블로그 SEO 작가입니다. 주어진 주제와 트렌드를 완벽하게 분석하여 기사 원문 복사 없이 문장을 완전히 새롭게 조합해 독창적인 글을 작성하세요. "
         f"스타일: {style_desc}, 길이: {len_desc}"
     )
     prompts = {
-        "워드프레스": f"{shared}\n【워드프레스 전용 - HTML 태그 <h2> 사용】 출력 양식: [제목], [메타 디스크립션], [3번 방식 고유 썸네일 카피 가이드], [1, 2번 방식 저작권 무죄 소스 가이드], [본문] (중간에 [📷 사진 추천 마크] 3개 삽입)",
-        "네이버 블로그": f"{shared}\n【네이버 블로그 전용 - 구어체 말투 준수】 출력 양식: [제목], [3번 방식 고유 썸네일 카피 가이드], [1, 2번 방식 저작권 프리 소스], [본문] (소제목 ▶ 사용 및 중간에 [📷 사진 추천 마크] 3개 삽입), [해시태그]",
-        "티스토리": f"{shared}\n【티스토리 전용 - 마크다운 ## 사용】 출력 양식: [제목], [핵심 답변], [3번 방식 고유 썸네일 카피 가이드], [1, 2번 방식 저작권 프리 소스], [본문] (중간에 [📷 사진 추천 마크] 3개 삽입), [FAQ]"
+        "워드프레스": f"{shared}\n【워드프레스 전용 - HTML 태그 <h2> 사용】 출력 양식: [제목], [메타 디스크립션], [본문] (중간에 [📷 사진 추천 마크] 3개 삽입)",
+        "네이버 블로그": f"{shared}\n【네이버 블로그 전용 - 구어체 말투 준수】 출력 양식: [제목], [본문] (소제목 ▶ 사용 및 중간에 [📷 사진 추천 마크] 3개 삽입), [해시태그]",
+        "티스토리": f"{shared}\n【티스토리 전용 - 마크다운 ## 사용】 출력 양식: [제목], [본문] (중간에 [📷 사진 추천 마크] 3개 삽입), [FAQ]"
     }
     return prompts.get(p, shared)
 
@@ -175,15 +186,14 @@ if st.sidebar.button("✨ 플랫폼별 블로그 글 생성", type="primary"):
         st.error("플랫폼을 하나 이상 선택해주세요.")
     else:
         results = {}
-        
         for p in platforms:
-            with st.spinner(f"AI({selected_model}) 엔진이 전용 게이트웨이를 통해 '{p}' 최적화 원고를 즉시 구성 중입니다..."):
+            with st.spinner(f"AI({selected_model}) 엔진이 전용 가성비 노드를 통해 '{p}' 원고를 최종 연산 중..."):
                 sys_p = get_system_prompt(p, style, length)
-                user_m = f"실시간 급상승 핵심 키워드인 '{query}' 소식을 바탕으로 블로그 포스팅 원고를 빌드하세요. 본문 중간 적절한 곳에 [📷 사진 추천 1: 위치 및 오피셜 소스 인용 가이드] 마크를 3개 이상 반드시 기입하세요. 오늘 날짜: {datetime.date.today().strftime('%Y-%m-%d')}"
+                user_m = f"실시간 핵심 키워드인 '{query}' 소식을 바탕으로 블로그 포스팅 원고를 빌드하세요. 본문 중간 적절한 곳에 [📷 사진 추천] 마크를 3개 이상 반드시 기입하세요. 오늘 날짜: {datetime.date.today().strftime('%Y-%m-%d')}"
                 
                 results[p] = call_ai_prime_tech(api_key, sys_p, user_m, selected_model)
         
-        st.success("🎉 블로그 원고 생산이 완료되었습니다!")
+        st.success("🎉 블로그 원고 생산 공정이 완료되었습니다!")
         tabs = st.tabs(platforms)
         for idx, p in enumerate(platforms):
             with tabs[idx]:
