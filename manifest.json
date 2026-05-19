@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "시그널 실시간 검색어 팩트 수집기",
+  "version": "1.0",
+  "description": "시그널 사이트의 데이터를 Streamlit 블로그 생성기 엔진으로 자동 포워딩합니다.",
+  "permissions": ["storage", "activeTab"],
+  "content_scripts": [
+    {
+      "matches": ["https://*.signal.bz/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
