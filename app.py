@@ -3,6 +3,7 @@ import json
 import http.client
 import os
 import datetime
+import glob
 
 # 페이지 설정
 st.set_page_config(page_title="실시간 뉴스 블로그 생성기", page_icon="📰", layout="wide")
@@ -12,6 +13,12 @@ HISTORY_DIR = "blog_history"
 if not os.path.exists(HISTORY_DIR): 
     os.makedirs(HISTORY_DIR)
 
+# 세션 상태 초기화 (글 생성과 썸네일 생성이 독립적으로 작동하기 위함)
+if "generated_content" not in st.session_state:
+    st.session_state.generated_content = {}
+if "selected_keyword" not in st.session_state:
+    st.session_state.selected_keyword = ""
+
 def save_to_history(keyword, platform, content):
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_keyword = "".join(c for c in keyword if c.isalnum() or c in (' ', '_', '-')).strip()
@@ -19,7 +26,7 @@ def save_to_history(keyword, platform, content):
     with open(filename, "w", encoding="utf-8") as f: 
         f.write(content)
 
-# 1. JSONBin 데이터 로드 (업데이트 시간 포함)
+# 1. JSONBin 데이터 로드 (시그널 사이트 데이터 수집)
 def load_extension_data():
     import urllib.request
     BIN_ID = "6a0c24886610dd3ae86c19cd"
@@ -52,7 +59,6 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         conn.close()
         
         result_json = json.loads(data)
-        
         if "content" in result_json and len(result_json["content"]) > 0:
             return result_json["content"][0].get("text", "본문 텍스트가 비어있습니다.")
         elif "error" in result_json:
@@ -62,96 +68,170 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     except Exception as e:
         return f"통신 장애 발생: {str(e)}"
 
-# 3. 화면 UI
+# 3. 화면 UI 및 사이드바 설정
 st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
 
-# 사이드바 설정
 st.sidebar.header("🔑 설정 및 시그널")
 api_key = st.sidebar.text_input("AI Prime Tech API Key", type="password")
 model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6"])
 
-# 데이터 로드 및 시그널 타임스탬프 표시
-live_kws, live_metadata, last_update = load_extension_data()
+# [기능] 시그널 사이트 바로가기 링크 생성
+st.sidebar.markdown("[🔗 시그널 실시간 사이트 바로가기](https://api.jsonbin.io/v3/b/6a0c24886610dd3ae86c19cd)")
 
-# [기능 1] 키워드 수집/도착 시각 안내
-st.sidebar.info(f"🕒 실시간 키워드 연동 시각: {last_update}")
+live_kws, live_metadata, last_update = load_extension_data()
+st.sidebar.info(f"🕒 시그널 데이터 연동 시각: {last_update}")
 
 if not live_kws:
     live_kws = ["대기 중..."]
 query = st.sidebar.selectbox("작성할 키워드 선택", live_kws)
-platforms = st.sidebar.multiselect("발행 플랫폼", ["네이버 블로그", "티스토리"], default=["네이버 블로그"])
-style = st.sidebar.selectbox("글 스타일", ["📰 뉴스 보도체", "😊 쉬운 설명체"])
 
-# [기능 2] 글자 수 옵션 선택 UI 추가
+# [기능] 발행 플랫폼 워드프레스 추가
+platforms = st.sidebar.multiselect("발행 플랫폼", ["네이버 블로그", "티스토리", "워드프레스"], default=["네이버 블로그"])
+
+# [기능] 글 스타일 4종류로 확장
+style = st.sidebar.selectbox("글 스타일", [
+    "📰 뉴스 보도체 (객관적, 사실 중심)", 
+    "😊 쉬운 설명체 (친근함, 이모지 활용)",
+    "🔥 이슈 분석체 (전문가 관점, 비판적 분석)",
+    "✍️ 스토리텔링체 (부드러운 이야기 형식, 몰입감)"
+])
+
 length_option = st.sidebar.selectbox("목표 글자 수", ["공백 제외 1,000자 내외", "공백 제외 1,500자 내외", "공백 제외 2,000자 이상(상세히)"])
 
-# 메인 생성 로직
-if st.sidebar.button("✨ 글 생성하기", type="primary"):
-    if not api_key:
-        st.error("API 키를 입력하세요.")
-    elif query == "대기 중..." or not query:
-        st.error("작성할 유효한 키워드를 선택해주세요.")
-    elif not platforms:
-        st.warning("발행 플랫폼을 최소 하나 이상 선택해주세요.")
-    else:
-        factual_summary = live_metadata.get(query, "최신 정보 없음")
+st.sidebar.divider()
+
+# [기능] 과거에 글 만들었던 기록 보기 (히스토리 기능)
+st.sidebar.subheader("📂 과거 생성 기록 조회")
+history_files = glob.glob(f"{HISTORY_DIR}/*.txt")
+if history_files:
+    # 최신 파일 순 정렬
+    history_files.sort(key=os.path.getmtime, reverse=True)
+    file_names = [os.path.basename(f) for f in history_files]
+    selected_file = st.sidebar.selectbox("기록된 파일 선택", ["선택 안 함"] + file_names)
+    
+    if selected_file != "선택 안 함":
+        with open(f"{HISTORY_DIR}/{selected_file}", "r", encoding="utf-8") as f:
+            history_content = f.read()
+        st.sidebar.text_area("📄 기록된 본문 내용", value=history_content, height=250)
+else:
+    st.sidebar.caption("생성된 히스토리 기록이 아직 없습니다.")
+
+
+# --- 메인 탭 구조 설정 (글 생성 탭 / 과거 기록 크게 보기 탭) ---
+tab1, tab2 = st.tabs(["✨ 포스팅 생성기", "📂 전체 히스토리 보관함"])
+
+with tab1:
+    # 1단계: 글 생성하기 버튼
+    if st.button("🚀 1단계: 블로그 글 생성하기", type="primary"):
+        if not api_key:
+            st.error("API 키를 입력하세요.")
+        elif query == "대기 중..." or not query:
+            st.error("작성할 유효한 키워드를 선택해주세요.")
+        elif not platforms:
+            st.warning("발행 플랫폼을 최소 하나 이상 선택해주세요.")
+        else:
+            factual_summary = live_metadata.get(query, "최신 정보 없음")
+            st.session_state.selected_keyword = query
+            st.session_state.generated_content = {}  # 기존 결과 초기화
+            
+            for p in platforms:
+                # 스타일에 따른 톤앤매너 분기 (4종류)
+                tone_instruction = ""
+                if "뉴스 보도체" in style:
+                    tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조(~다, ~합니다)로 작성하세요. 주관적 감정은 배제하고 팩트 전달에 집중하세요."
+                elif "쉬운 설명체" in style:
+                    tone_instruction = "친근한 블로그 어조(~에요, ~습니다)로 작성하세요. 독자가 이해하기 쉽게 비유를 쓰고 적절한 이모지를 활용하세요."
+                elif "이슈 분석체" in style:
+                    tone_instruction = "날카로운 평론가/전문가 어조로 작성하세요. 사건의 배경, 원인, 향후 미칠 파장이나 전망까지 입체적으로 분석해야 합니다."
+                elif "스토리텔링체" in style:
+                    tone_instruction = "독자가 소설이나 에세이를 읽듯 몰입할 수 있도록 서두를 열고 징검다리식 전개 방식을 사용하여 부드럽게 서술하세요."
+
+                # 플랫폼별 특성 반영 (워드프레스 포함)
+                platform_instruction = ""
+                if p == "네이버 블로그":
+                    platform_instruction = (
+                        "- 제목은 클릭을 부르는 매력적인 제목 3개를 추천해 주되, 그중 가장 좋은 것 하나를 본문 맨 위에 크게 배치하세요.\n"
+                        "- '서론-본문(소제목 분할)-결론(내 의견/맺음말)' 구조를 명확히 하세요.\n"
+                        "- 문단을 자주 나누고 키워드가 자연스럽게 스며들도록 하세요."
+                    )
+                elif p == "티스토리":
+                    platform_instruction = (
+                        "- 구글 SEO 친화적인 구조로, 제목은 핵심 키워드가 맨 앞에 오는 명확한 제목 1개만 상단에 배치하세요.\n"
+                        "- 본문은 대제목, 소제목 구조(H2, H3 스타일 문맥)를 확실히 지켜 논리적으로 작성하세요."
+                    )
+                elif p == "워드프레스":
+                    platform_instruction = (
+                        "- 전 세계 및 구글 통합 검색에 최적화된 웹 표준 포맷으로 작성하세요.\n"
+                        "- 글 맨 처음에 '요약(Snippet)' 문단을 한 줄로 명확하게 넣어 가독성을 높이세요.\n"
+                        "- 소제목 구분을 완벽히 하고, 문장 간결성을 유지하여 가독성을 극대화하세요."
+                    )
+
+                # 종합 프롬프트 조립 (뉴스 및 시그널 요약본 기반 작성 규칙 + 사진 및 링크 자동 추천 추가)
+                sys_prompt = (
+                    f"당신은 실시간 트렌드 전문 파워블로거이자 디지털 카피라이터입니다. 제공된 시그널 사이트 요약본과 최신 뉴스 맥락을 토대로 독자에게 깊이 있는 글을 작성해야 합니다.\n\n"
+                    f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
+                    f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
+                    f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 알차게 채워주세요.\n\n"
+                    f"[🔗 팩트 기반 이미지/링크 출처 수집 규칙]\n"
+                    f"- 만약 이 키워드가 '연예인, 셀럽, 아이돌, 인플루언서' 관련 뉴스라면, 글의 하단에 관련된 공식 인스타그램(Instagram) 링크나 소속사 공식 사이트 링크를 안내하여 독자가 고화질 사진을 합법적으로 볼 수 있게 유도하세요.\n"
+                    f"- 만약 이 키워드가 '정부 정책, 나라 일, 경제, 사회 법안, 공공 데이터' 관련 뉴스라면, 글 하단에 대한민국 정부 브리핑실, 관련 부처(기재부, 국토부 등) 공식 사이트의 직접 다운로드 가능한 경로 정보나 링크 예시를 명확히 포함시켜 주세요.\n"
+                    f"- 글과 관련된 상업적 무료 이미지(Unsplash, Pixabay 등) 검색 키워드 팁도 함께 적어주세요.\n\n"
+                    f"[⚠️ 절대 금지 규칙]\n"
+                    f"- 본문 내에서 마크다운 강조 기호인 '**' (별표 두 개)는 절대 사용하지 마세요.\n"
+                    f"- 'AI 요약에 따르면' 같은 문구는 절대 금지합니다. 직접 분석한 것처럼 쓰세요."
+                )
+                
+                user_msg = (
+                    f"● 타겟 키워드: {query}\n"
+                    f"● 시그널 사이트 기반 팩트 요약본:\n{factual_summary}\n\n"
+                    f"이 수집 시그널과 관련 뉴스 맥락을 완벽히 분석하여 완성도 높은 포스팅과 공식 사진 수집 처 링크를 포함한 글을 완성해줘."
+                )
+                
+                with st.spinner(f"[{p}] {style} 스타일에 맞춰 글을 생성하는 중..."):
+                    content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
+                    if "통신 장애 발생" not in content and "AI API 에러" not in content:
+                        st.session_state.generated_content[p] = content
+                        save_to_history(query, p, content)
+                    else:
+                        st.error(f"[{p}] 생성 오류: {content}")
+
+    # 생성된 글이 있을 때 화면에 렌더링 및 썸네일 버튼 노출
+    if st.session_state.generated_content:
+        st.success("🎉 선택한 플랫폼의 블로그 글 생성이 완료되었습니다!")
         
-        # 플랫폼별 순회하며 생성
-        for p in platforms:
-            # 1. 스타일에 따른 톤앤매너
-            tone_instruction = ""
-            if style == "📰 뉴스 보도체":
-                tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조(~다, ~합니다)로 작성하세요. 자극적인 수식어는 배제하고 팩트 전달에 집중하세요."
-            elif style == "😊 쉬운 설명체":
-                tone_instruction = "친근한 블로그 어조(~에요, ~습니다)로 작성하세요. 독자가 이해하기 쉽게 비유를 섞어가며 친절하게 설명하세요. 적절한 이모지를 섞어주면 좋습니다."
-
-            # 2. 플랫폼별 특성 반영
-            platform_instruction = ""
-            if p == "네이버 블로그":
-                platform_instruction = (
-                    "- 제목은 클릭을 부르는 매력적인 제목 3개를 추천해 주되, 그중 가장 좋은 것 하나를 본문 맨 위에 크게 배치하세요.\n"
-                    "- 네이버 블로그 특성에 맞게 '서론-본문(소제목 분할)-결론(내 의견/맺음말)' 구조를 명확히 하세요.\n"
-                    "- 가독성을 위해 문단을 자주 나누고, 중요한 키워드는 문맥 속에서 자연스럽게 강조되도록 하세요."
-                )
-            elif p == "티스토리":
-                platform_instruction = (
-                    "- SEO(검색엔진 최적화)에 최적화된 구글 친화적 구조로 작성하세요.\n"
-                    "- 제목은 핵심 키워드가 맨 앞에 오는 명확한 제목 1개만 깔끔하게 작성하세요.\n"
-                    "- 본문은 H2, H3 형태의 논리적인 소제목 구조를 갖추고, 정보의 깊이가 느껴지도록 서술하세요."
-                )
-
-            # 3. 종합 시스템 프롬프트 조립 (글자 수 및 [기능 3] 썸네일 규칙 포함)
-            sys_prompt = (
-                f"당신은 전문 파워블로거이자 카피라이터입니다. 제공된 요약 정보를 바탕으로 독자에게 유익하고 완성도 높은 글을 작성해야 합니다.\n\n"
-                f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
-                f"[플랫폼별 작성 규칙]\n{platform_instruction}\n\n"
-                f"[글자 수 제한 규칙]\n- 분량은 반드시 **{length_option}**에 맞추어 알차고 풍부한 정보량으로 채워주세요.\n\n"
-                f"[⚡ 썸네일 추천 규칙]\n"
-                f"- 글 작성이 모두 끝난 맨 마지막 줄에 '---' 구분선을 그은 후, [추천 썸네일 아이디어] 섹션을 만들어주세요.\n"
-                f"- 이 글에 가장 잘 어울리는 이미지 썸네일 디자인 컨셉 1개와, 미드저니/DALL-E 같은 이미지 AI에 그대로 입력할 수 있는 영어 프롬프트(Prompt)를 1줄로 작성해 주세요.\n\n"
-                f"[⚠️ 절대 금지 규칙]\n"
-                f"- 본문 내에서 마크다운 강조 기호인 '**' (별표 두 개)는 절대 사용하지 마세요. (텍스트 강조 시 기호 없이 문맥으로 처리할 것)\n"
-                f"- AI가 작성한 티가 나는 문구(예: 'AI 요약에 따르면', '아래는 요약 내용입니다')는 절대 넣지 마세요."
-            )
-            
-            # 4. 사용자 메시지
-            user_msg = (
-                f"● 타겟 키워드: {query}\n"
-                f"● 키워드 수집 시각: {last_update}\n"
-                f"● 팩트 및 정보 요약:\n{factual_summary}\n\n"
-                f"위 정보를 완벽히 녹여내어 독자들이 끝까지 읽을 수 있는 매력적인 블로그 포스팅과 썸네일 제안까지 완성해줘."
-            )
-            
-            widget_key = f"txt_area_{p.replace(' ', '_')}"
-            
-            with st.spinner(f"[{p}] {length_option} 분량으로 글 및 썸네일 생성 중..."):
-                content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
+        for p, content in st.session_state.generated_content.items():
+            widget_key = f"main_txt_{p.replace(' ', '_')}"
+            st.subheader(f"✨ {p} 결과물")
+            st.text_area("본문 내용", value=content, height=500, key=widget_key)
+        
+        st.divider()
+        st.subheader("🖼️ 2단계: 썸네일 생성하기")
+        st.info("위 본문 내용을 바탕으로 디자인 컨셉과 미드저니/DALL-E용 영어 프롬프트를 생성합니다.")
+        
+        # 2단계: 썸네일 생성하기 버튼 (독립 실행 가능)
+        if st.button("🎨 썸네일 컨셉 & 이미지 프롬프트 만들기", type="secondary"):
+            with st.spinner("AI가 포스팅 맞춤형 썸네일 프롬프트를 기획 중입니다..."):
+                thumb_sys_prompt = "당신은 전문 그래픽 디자이너입니다. 제공되는 블로그 본문을 분석하여, 유튜브 및 블로그에 가장 어울리는 트렌디한 썸네일 배치를 기획하고, 이미지 생성 AI(DALL-E 3, Midjourney)에 바로 넣을 수 있는 고품질 영어 프롬프트를 추출해내야 합니다."
                 
-                st.subheader(f"✨ {p} 결과물 ({style})")
-                st.text_area("내용 (본문 + 맨 아래 썸네일 가이드 포함)", value=content, height=600, key=widget_key)
+                # 첫 번째 생성된 플랫폼의 본문을 기준으로 썸네일 기획
+                base_content = list(st.session_state.generated_content.values())[0]
+                thumb_user_msg = f"키워드: {st.session_state.selected_keyword}\n\n이 글을 대표할 수 있는 썸네일 이미지 디자인을 기획해줘. 결과물에는 [썸네일 디자인 설명]과, 복사해서 쓸 수 있는 [AI 이미지 생성용 영어 프롬프트(English Prompt)]가 명확히 들어가야 해."
                 
-                # 오류 메시지가 아닌 정상 글일 때만 파일 저장
-                if "통신 장애 발생" not in content and "AI API 에러" not in content:
-                    save_to_history(query, p, content)
-            
-            st.divider()
+                thumb_result = call_ai_prime_tech(api_key, thumb_sys_prompt, thumb_user_msg, model)
+                
+                st.write("### 💡 추천 썸네일 제작 가이드")
+                st.info(thumb_result)
+
+# --- 탭 2: 전체 히스토리 보관함 큰 화면 제공 ---
+with tab2:
+    st.subheader("📚 과거에 생성된 모든 글 보관소")
+    all_files = glob.glob(f"{HISTORY_DIR}/*.txt")
+    if all_files:
+        all_files.sort(key=os.path.getmtime, reverse=True)
+        for f_path in all_files:
+            f_name = os.path.basename(f_path)
+            with st.expander(f"📄 {f_name}"):
+                with open(f_path, "r", encoding="utf-8") as f:
+                    st.text_area("내용", value=f.read(), height=300, key=f"tab2_{f_name}")
+    else:
+        st.info("저장된 과거 글 기록이 없습니다.")
