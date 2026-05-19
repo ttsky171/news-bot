@@ -38,16 +38,31 @@ def get_history_files():
 # [🛠️ 수신 엔진] 크롬 확장 프로그램이 보낸 데이터 로드 함수
 # -------------------------------------------------------------
 def load_extension_data():
-    """확장 프로그램이 파일로 떨구거나 전송한 시그널 실시간 데이터를 동적 로드"""
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # 데이터가 너무 오래되지 않았는지 검증 (예: 1시간 이내)
-                return data.get("keywords", []), data.get("metadata", {}), data.get("updated_at", "미정")
-        except:
-            pass
-    return [], {}, "데이터 없음"
+    """인터넷 우체통(JSONBin)에 확장 프로그램이 저장해 둔 시그널 데이터를 실시간으로 읽어옴"""
+    import urllib.request
+    import json
+    
+    # 🚨 [여기만 형의 정보로 수정!] 방금 만든 우체통 주소와 비밀번호 입력
+    BIN_ID = "여기에_형의_Bin_ID를_적어줘"
+    MASTER_KEY = "여기에_형의_X-Master-Key(또는 access-key)를_적어줘"
+    
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
+        req = urllib.request.Request(url, headers={"X-Master-Key": MASTER_KEY})
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            # jsonbin.io는 'record'라는 주머니 안에 우리가 보낸 데이터를 담아줘
+            actual_data = res_data.get("record", {})
+            
+            return (
+                actual_data.get("keywords", []), 
+                actual_data.get("metadata", {}), 
+                actual_data.get("updated_at", "미정")
+            )
+    except Exception as e:
+        # 혹시나 우체통이 비어있거나 에러 나면 안전하게 빈 값 반환
+        return [], {}, f"연동 대기 중"
 
 # API Key 저장/불러오기
 if "api_key_saved" not in st.session_state:
