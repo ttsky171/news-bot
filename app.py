@@ -14,6 +14,26 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# -------------------------------------------------------------
+# [기능 추가] 브라우저 로컬 스토리지를 이용한 API Key 저장/불러오기 스크립트
+# -------------------------------------------------------------
+if "api_key_saved" not in st.session_state:
+    st.session_state["api_key_saved"] = ""
+
+# 자바스크립트를 이용해 브라우저 로컬 스토리지에서 키를 읽어오는 꼼수 컴포넌트
+import streamlit.components.v1 as components
+st.markdown(
+    """
+    <script>
+    const savedKey = localStorage.getItem("prime_tech_api_key");
+    if (savedKey) {
+        parent.window.postMessage({type: "streamlit:setComponentValue", value: savedKey}, "*");
+    }
+    </script>
+    """,
+    unsafe_allow_html=True
+)
+
 st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
 st.caption("AI 프라임텍 전용 클라우드 노드 구동 엔진 · 저작권 회피형 미디어 가이드 자동 맵핑")
 
@@ -24,7 +44,29 @@ st.sidebar.header("🔑 인증 및 옵션 설정")
 st.sidebar.link_button("🔥 Signal.bz (시그널 실시간 검색어) 바로가기", "https://signal.bz")
 st.sidebar.markdown("---")
 
-api_key = st.sidebar.text_input("AI Prime Tech API Key 입력", type="password")
+# -------------------------------------------------------------
+# [기능 추가] 세션 상태 확인 및 입력창 연동
+# -------------------------------------------------------------
+# 이전에 저장된 키가 있다면 기본값으로 불러옵니다.
+if st.session_state["api_key_saved"]:
+    default_key = st.session_state["api_key_saved"]
+else:
+    default_key = ""
+
+api_key = st.sidebar.text_input("AI Prime Tech API Key 입력", value=default_key, type="password")
+
+# 키가 새로 입력되거나 변경되면 브라우저 로컬 스토리지에 자동 저장하는 자바스크립트 실행
+if api_key and api_key != st.session_state["api_key_saved"]:
+    st.session_state["api_key_saved"] = api_key
+    st.markdown(
+        f"""
+        <script>
+        localStorage.setItem("prime_tech_api_key", "{api_key}");
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+
 raw_text = st.sidebar.text_area("🔥 Signal.bz 순위 통째로 복사·붙여넣기", height=150, 
                                placeholder="1 유재석 캠프\n2 어린이날...")
 
@@ -54,8 +96,6 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
     host = "aiprimetech.io"
     path = "/v1/messages"
     
-    # [핵심 수정] 오류를 일으키는 "tools" (웹검색 기능) 설정을 완전히 제거했습니다.
-    # 대행 서버가 멈추지 않고 곧바로 텍스트 답변을 100% 신뢰성 있게 보내도록 유도합니다.
     payload = json.dumps({
         "model": "claude-sonnet-4-6",
         "max_tokens": 3000, 
@@ -84,7 +124,6 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
         
         output_text = ""
         
-        # 텍스트 추출 가동
         if isinstance(content_list, list):
             for block in content_list:
                 if isinstance(block, dict) and block.get("type") == "text":
@@ -92,7 +131,6 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
         elif isinstance(content_list, dict):
             output_text = content_list.get("text", "")
             
-        # 최후의 수단으로 텍스트가 비어있다면 에러 메시지 대신 날 것의 텍스트가 있는지 다시 검색
         if not output_text.strip():
             if "text" in str(result_json):
                 return f"⚠️ [우회 복구 성공]\n\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
@@ -106,10 +144,8 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
         conn.close()
 
 def get_system_prompt(p, style_desc, len_desc):
-    # [프롬프트 최적화] 웹 검색 기능 대신, AI가 지닌 자체 실시간 지식 엔진을 사용하도록 속이는 프롬프트를 주입합니다.
     shared = (
-        f"당신은 실시간 인터넷 뉴스 정보와 트렌드를 실시간으로 전수조사하여 파악하고 있는 한국 최고의 블로그 SEO 작가입니다. "
-        f"제공된 키워드에 대한 최신 뉴스 내용, 사건 배경, 대중의 반응을 완벽하게 추론하고 가상으로 완벽히 분석하여, 기사 원문 복사 없이 문장을 완전히 새롭게 조합해 독창적인 글을 작성하세요. "
+        f"당신은 한국 최고의 블로그 SEO 작가입니다. 주어진 주제와 트렌드를 완벽하게 추론하고 분석하여, 기사 원문 복사 없이 문장을 완전히 새롭게 조합해 독창적인 글을 작성하세요. "
         f"스타일: {style_desc}, 길이: {len_desc}"
     )
     prompts = {
