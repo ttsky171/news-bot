@@ -55,7 +55,7 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {key}'}
     
     try:
-        conn = http.client.HTTPSConnection(host, timeout=60)
+        conn = http.client.HTTPSConnection(host, timeout=120)
         conn.request("POST", "/v1/messages", payload, headers)
         res = conn.getresponse()
         data = res.read().decode("utf-8")
