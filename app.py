@@ -50,20 +50,21 @@ def save_to_history(keyword, platform, content):
     with open(filename, "w", encoding="utf-8") as f: 
         f.write(content)
 
-# 🚨 [핵심 추가] AI가 출력한 외국어(한자, 일어, 중국어)를 원천 차단 및 정화하는 함수
+# 🚨 [강력 보안 버전] 한글, 숫자, 영문, 기본 부호, # 외의 모든 외국어 문자를 완벽 청소하는 함수
 def clean_foreign_languages(text):
     if not text:
         return text
     
-    # 1. 일본어(가타카나, 히라가나) 및 불필요한 한자 전면 제거 패턴
-    # 한자 범위: \u4e00-\u9fff, 일어 범위: \u3040-\u30ff
-    text = re.sub(r'[\u3040-\u309f\u30a0-\u30ff]', '', text) # 일어 삭제
-    text = re.sub(r'[\u4e00-\u9fff]', '', text) # 한자 전면 삭제
+    # 한글(가-힣), 영문(a-zA-Z), 숫자(0-9), 해시태그(#), 줄바꿈(\n), 공백(\s), 기본 문장부호 및 인용구만 허용
+    # 한자, 일어(가타카나/히라가나), 기타 알 수 없는 아시아권 문자 찌꺼기를 원천 차단합니다.
+    allowed_pattern = re.compile(r'[^가-힣a-zA-Z0-9#\s\n.,?!~\"\'\(\)\[\]\-\_\·\’\‘\“\”\…]')
     
-    # 2. 번역 오류로 인해 뭉개진 영문/외국어 조사 패턴 정화 (ex: 은는이가 앞에 붙은 찌꺼기들)
-    # 간혹 발생하는 "的主張" -> "주장" 처럼 한자가 사라진 자리를 매끄럽게 다듬기
-    text = text.replace("  ", " ") # 중복 공백 제거
-    return text
+    # 허용되지 않은 문자(외국어 등)를 발견하면 공백으로 지워버립니다.
+    cleaned_text = allowed_pattern.sub('', text)
+    
+    # 문장 가독성을 해치는 이중 공백 정리
+    cleaned_text = re.sub(r' +', ' ', cleaned_text)
+    return cleaned_text
 
 # 1. JSONBin 및 시그널 데이터 로드
 def load_extension_data():
@@ -149,7 +150,7 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
                 return f"AI API 에러 발생: {result_json['error']}"
         
         if raw_text.strip():
-            # 🚨 반환 직전 후처리 필터를 거쳐 외국어 오염을 깨끗하게 청소합니다.
+            # 🚨 어떤 오염 찌꺼기가 남든 화면에 표출하기 직전 완벽하게 정제합니다.
             return clean_foreign_languages(raw_text)
             
         return "본문 텍스트가 비어있습니다."
@@ -172,7 +173,7 @@ if api_key != st.session_state.api_key_storage:
     st.session_state.api_key_storage = api_key
     save_api_key(api_key)
 
-# 💡 손넷 모델에서 오염이 심할 경우 오푸스(Opus) 모델이나 다른 기본 모델을 쓰면 완전히 해결되기도 합니다.
+# 💡 팁: 'claude-sonnet-4-6'에서 다국어 깨짐 현상이 유독 잦다면 'claude-opus-4-6'로 변경하여 테스트해보는 것도 좋은 방법입니다.
 model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6"])
 
 st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기](https://signal.bz/)")
@@ -208,7 +209,6 @@ length_option = st.sidebar.selectbox("목표 글자 수 (최소 보장 기준)",
 
 st.sidebar.divider()
 
-# 과거 생성 기록 조회
 st.sidebar.subheader("📂 과거 생성 기록 조회")
 history_files = glob.glob(f"{HISTORY_DIR}/*.txt")
 if history_files:
@@ -258,34 +258,33 @@ with tab1:
                 if "뉴스 보도체" in style:
                     tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조 (~다, ~합니다)로 작성하세요."
                 elif "쉬운 설명체" in style:
-                    tone_instruction = "친근한 블로그 어조 (~에요, ~습니다)로 작성하고 이모지를 활용하세요."
+                    tone_instruction = "친근한 블로그 어조 (~에요, ~습니다)로 작성하고 알맞은 이모지를 섞으세요."
                 elif "이슈 분석체" in style:
-                    tone_instruction = "날카로운 전문 평론가 어조로 원인과 전망을 깊이 있게 다루세요."
+                    tone_instruction = "날카로운 전문 평론가 입장에서 깊이 있는 배경 분석과 전망을 서술하세요."
                 elif "스토리텔링체" in style:
-                    tone_instruction = "자연스러운 호흡의 부드러운 이야기 형식으로 서술하세요."
+                    tone_instruction = "독자가 읽기 편안하도록 부드러운 호흡의 이야기 형식으로 서술하세요."
 
                 platform_instruction = ""
                 if p == "네이버 블로그":
-                    platform_instruction = "- 제목은 맨 위에 적고 바로 본문 단락으로 넘어가세요.\n- 단락 사이에는 2줄 정도의 공백을 두어 레이아웃을 잡으세요."
+                    platform_instruction = "- 제목은 맨 위에 한 줄로 적고 바로 서론으로 자연스럽게 진입하세요.\n- 단락 사이에는 엔터를 2번 쳐서 가독성을 확보하세요."
                 elif p == "티스토리":
-                    platform_instruction = "- 핵심 키워드가 맨 앞에 오는 명확한 제목을 상단에 배치하세요."
+                    platform_instruction = "- 핵심 키워드가 잘 드러나는 제목을 상단에 깔끔하게 배치하세요."
                 elif p == "워드프레스":
-                    platform_instruction = "- 문장을 간결하고 군더더기 없이 마침표로 딱 끊어지게 쓰세요."
+                    platform_instruction = "- 문장을 질질 끌지 말고 간결하고 깔끔하게 마침표로 딱 끊어지도록 마무리지으세요."
 
-                # 시스템 지침 강화
                 sys_prompt = (
-                    f"당신은 검색 노출 알고리즘을 완벽히 꿰뚫고 있는 전문 파워블로거입니다. "
-                    f"입력된 키워드와 뉴스를 바탕으로 한국인 사용자가 완벽하게 읽을 수 있는 매끄러운 글을 작성하세요.\n\n"
-                    f"🛑 [외국어 어휘 및 일어/중국어 조사 전면 사용 금지 규칙]\n"
-                    f"- 문장 사이에 한자, 일본어 단어, 중국어 한자 기호가 절대로 섞여 나오지 않게 하십시오.\n"
-                    f"- 모든 문장은 오직 순수하고 올바른 '한국어' 표준 문장으로만 완성되어야 합니다.\n\n"
-                    f"❌ [AI 흔적 및 마크다운 기호 절대 금지]\n"
-                    f"- 본문 어디에도 '**', '###', '##', '*', '-', '◆' 같은 마크다운 문법이나 인위적인 기호를 절대 쓰지 마세요.\n"
-                    f"- 소제목은 기호 없이 평범한 텍스트로만 적고, 엔터를 쳐서 문단을 나누세요.\n\n"
+                    f"당신은 검색 알고리즘 최적화를 완벽히 마스터한 블로그 포스팅 전문가입니다. "
+                    f"입력된 키워드와 뉴스를 바탕으로 한국인 독자가 가독성 높게 읽을 수 있는 매끄러운 글을 작성하세요.\n\n"
+                    f"🛑 [외국어 어휘 및 일어/중국어/한자 전면 사용 금지 지침]\n"
+                    f"- 문맥 도중에 한자, 일본어 단어, 조사, 중국어 번역투가 절대로 섞여 나오지 않도록 각별히 유의하세요.\n"
+                    f"- 모든 문장은 반드시 올바른 문법의 순수 '한국어' 표준 문장으로만 완성되어야 합니다.\n\n"
+                    f"❌ [마크다운 문법 및 강조 기호 사용 전면 금지]\n"
+                    f"- 본문 어느 곳에도 '**', '###', '##', '*', '-', '◆', '■' 같은 마크다운 기호 및 특수문자를 절대 쓰지 마세요.\n"
+                    f"- 문단을 구분하는 소제목은 아무런 기호 없이 평범한 텍스트나 숫자 넘버링 형태로만 적고, 줄바꿈을 넉넉히 하세요.\n\n"
                     f"🔢 [글자 수 규칙]\n"
-                    f"- 작성되는 순수 본문 분량은 무조건 {target_length}이어야 합니다. 문장을 상세하고 풍부하게 늘려서 채우세요.\n\n"
+                    f"- 작성되는 순수 본문 분량은 무조건 {target_length} 이상이어야 합니다. 내용을 다양하고 구체적인 문장들로 채워 넣으세요.\n\n"
                     f"🏷️ [최적화 태그 생성 규칙]\n"
-                    f"- 글 맨 마지막 단락에 해시태그를 띄어쓰기와 '#' 기호로만 20개 이상 나열해 주세요.\n\n"
+                    f"- 글 맨 마지막 단락에 블로그용 해시태그를 공백과 '#' 기호로만 조합하여 20개 이상 나열해 주세요.\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
                     f"[플랫폼별 작성 규칙]\n{platform_instruction}"
                 )
@@ -293,10 +292,10 @@ with tab1:
                 user_msg = (
                     f"● 키워드: {final_query}\n"
                     f"● 뉴스 맥락 정보:\n{custom_summary}\n\n"
-                    f"위 지침을 토대로 글을 작성해줘. 절대로 문장 중간에 한자나 중국어, 일본어 문법 찌꺼기가 섞여 나오지 않도록 한국어 텍스트 품질에 온 신경을 집중해줘."
+                    f"위 지침을 토대로 글을 작성해줘. 절대로 문장 중간에 불필요한 한자나 중국어, 일본어 문법 찌꺼기가 섞여 나오지 않도록 텍스트 품질을 엄격하게 관리해줘."
                 )
                 
-                with st.spinner(f"[{p}] 글을 생성하고 오염된 외국어 기호를 필터링하는 중..."):
+                with st.spinner(f"[{p}] 글을 생성하고 정밀 화이트리스트 필터로 정제하는 중..."):
                     content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
                     if "통신 장애 발생" not in content and "AI API 에러" not in content:
                         st.session_state.generated_content[p] = content
@@ -305,7 +304,7 @@ with tab1:
                         st.error(f"[{p}] 생성 오류: {content}")
 
     if st.session_state.generated_content:
-        st.success("🎉 정화 작업 및 블로그 글 생성이 완료되었습니다!")
+        st.success("🎉 화이트리스트 정제 및 블로그 글 생성이 완료되었습니다!")
         for p, full_content in st.session_state.generated_content.items():
             st.subheader(f"✨ {p} 결과물")
             st.text_area("📋 제목 + 본문 + 최적화 태그 (통째로 복사해서 사용하세요)", value=full_content, height=650, key=f"body_area_{p}")
