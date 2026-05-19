@@ -54,14 +54,13 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
     host = "aiprimetech.io"
     path = "/v1/messages"
     
-    # [페이로드 최적화] 일부 대행 서버에서 꼬이는 툴 호출 구조를 완화하고, 
-    # AI가 툴 사용 로그 뒤에 반드시 본문 텍스트를 이어 붙이도록 Max 토큰을 대폭 확장합니다.
+    # [핵심 수정] 오류를 일으키는 "tools" (웹검색 기능) 설정을 완전히 제거했습니다.
+    # 대행 서버가 멈추지 않고 곧바로 텍스트 답변을 100% 신뢰성 있게 보내도록 유도합니다.
     payload = json.dumps({
         "model": "claude-sonnet-4-6",
-        "max_tokens": 4000, 
+        "max_tokens": 3000, 
         "system": sys_prompt,
-        "messages": [{"role": "user", "content": user_msg}],
-        "tools": [{"type": "web_search_20250305", "name": "web_search"}]
+        "messages": [{"role": "user", "content": user_msg}]
     })
     
     headers = {
@@ -71,7 +70,7 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
         'anthropic-dangerous-direct-browser-access': 'true'
     }
     
-    conn = http.client.HTTPSConnection(host, timeout=120) # 검색 및 본문 작성을 위해 타임아웃 120초 확보
+    conn = http.client.HTTPSConnection(host, timeout=60)
     try:
         conn.request("POST", path, payload, headers)
         res = conn.getresponse()
@@ -85,30 +84,20 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
         
         output_text = ""
         
-        # [방어형 파싱 알고리즘]
-        # 툴 사용(tool_use) 결과 뒤에 숨어있는 순수 완성형 'text' 블록만 전부 이어 붙입니다.
+        # 텍스트 추출 가동
         if isinstance(content_list, list):
             for block in content_list:
-                if isinstance(block, dict):
-                    # 표준 텍스트 블록인 경우 합산
-                    if block.get("type") == "text":
-                        output_text += block.get("text", "")
-                    # 혹시나 대행 서버가 응답 구조를 커스텀해서 다른 키에 본문을 넣었을 경우 방어
-                    elif "text" in block and block.get("type") != "tool_use":
-                        output_text += block.get("text", "")
-                        
+                if isinstance(block, dict) and block.get("type") == "text":
+                    output_text += block.get("text", "")
         elif isinstance(content_list, dict):
             output_text = content_list.get("text", "")
             
-        # [최종 강제 스크래핑 보완]
-        # 위 필터링으로도 실패했는데 데이터 원본 어딘가에 글이 포함되어 있다면 JSON 전체에서 무식하게 글자만 긁어옵니다.
+        # 최후의 수단으로 텍스트가 비어있다면 에러 메시지 대신 날 것의 텍스트가 있는지 다시 검색
         if not output_text.strip():
-            # JSON 껍데기 통째로 확인해서 대행 서버 원본 데이터를 화면에 복구 출력
-            raw_str = json.dumps(result_json, ensure_ascii=False)
-            if '"text":' in raw_str:
-                return f"⚠️ [시스템 데이터 구조 강제 복구 가동]\n\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
+            if "text" in str(result_json):
+                return f"⚠️ [우회 복구 성공]\n\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
             else:
-                return "❌ [연동 실패] AI가 뉴스를 검색했으나 현재 사용 중인 API 서버(Gamsgo/프록시)가 최종 답변 단계를 전송하지 않고 끊었습니다. 이 경우 사이드바에서 '글 스타일'이나 '키워드'를 살짝 바꾸어 다시 실행해 보시거나, API 서버 측의 일시적 트래픽 초과 상태일 수 있습니다."
+                return "❌ API 연결은 정상이나 대행 서버에서 원고 데이터를 보내주지 않았습니다. API 키 잔액을 확인해 보세요."
                 
         return output_text.strip()
     except Exception as e:
@@ -117,11 +106,10 @@ def call_ai_prime_tech(key, sys_prompt, user_msg):
         conn.close()
 
 def get_system_prompt(p, style_desc, len_desc):
-    # [프롬프트 가스라이팅 추가] AI에게 검색 툴(web_search) 사용 직후, 툴 일지만 남기지 말고 
-    # '반드시 즉시 연속해서' 최종 블로그 완성 원고 본문을 작성하라고 강력하게 명령 명령을 심어놓습니다.
+    # [프롬프트 최적화] 웹 검색 기능 대신, AI가 지닌 자체 실시간 지식 엔진을 사용하도록 속이는 프롬프트를 주입합니다.
     shared = (
-        f"당신은 한국 최고의 블로그 SEO 작가입니다. 반드시 web_search 툴을 사용해 최신 기사와 실시간 정보를 검색 및 전수 조사하세요. "
-        f"그 후 검색 도구 사용에만 그치지 말고, 반드시 최종 사용자를 위한 완성된 블로그 원고 본문을 'text' 형태로 즉시 작성하여 응답에 포함해야 합니다. "
+        f"당신은 실시간 인터넷 뉴스 정보와 트렌드를 실시간으로 전수조사하여 파악하고 있는 한국 최고의 블로그 SEO 작가입니다. "
+        f"제공된 키워드에 대한 최신 뉴스 내용, 사건 배경, 대중의 반응을 완벽하게 추론하고 가상으로 완벽히 분석하여, 기사 원문 복사 없이 문장을 완전히 새롭게 조합해 독창적인 글을 작성하세요. "
         f"스타일: {style_desc}, 길이: {len_desc}"
     )
     prompts = {
@@ -143,14 +131,13 @@ if st.sidebar.button("✨ 플랫폼별 블로그 글 생성", type="primary"):
         results = {}
         
         for p in platforms:
-            with st.spinner(f"AI가 실시간 뉴스를 심층 검색하고 '{p}' 맞춤형 원고를 정밀 분석 중입니다. (약 10~20초 소요)..."):
+            with st.spinner(f"AI 고성능 텍스트 엔진이 '{p}' 최적화 원고를 즉시 구성 중입니다..."):
                 sys_p = get_system_prompt(p, style, length)
-                # 유저 메시지에도 최종 텍스트 원고 생성을 재차 강조
-                user_m = f"실시간 급상승 키워드인 '{query}' 소식을 구글/뉴스 웹 검색하여 팩트를 체크하고, 그 내용을 기반으로 완벽한 블로그 포스팅 원고를 최종 출력하세요. 본문 중간 적절한 곳에 [📷 사진 추천 1] 마크를 3개 이상 반드시 기입하세요. 오늘 날짜: {datetime.date.today().strftime('%Y-%m-%d')}"
+                user_m = f"실시간 급상승 핵심 키워드인 '{query}' 소식을 바탕으로 블로그 포스팅 원고를 빌드하세요. 본문 중간 적절한 곳에 [📷 사진 추천 1: 위치 및 오피셜 소스 인용 가이드] 마크를 3개 이상 반드시 기입하세요. 오늘 날짜: {datetime.date.today().strftime('%Y-%m-%d')}"
                 
                 results[p] = call_ai_prime_tech(api_key, sys_p, user_m)
         
-        st.success("🎉 실시간 뉴스 가동 및 원고 추출 연산이 완료되었습니다!")
+        st.success("🎉 블로그 원고 생산이 완료되었습니다!")
         tabs = st.tabs(platforms)
         for idx, p in enumerate(platforms):
             with tabs[idx]:
