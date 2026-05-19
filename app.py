@@ -14,7 +14,9 @@ HISTORY_DIR = "blog_history"
 if not os.path.exists(HISTORY_DIR): 
     os.makedirs(HISTORY_DIR)
 
-# 세션 상태 초기화
+# [💡 핵심 수정] 세션 상태 초기화 (API Key 보관 주입)
+if "api_key_storage" not in st.session_state:
+    st.session_state.api_key_storage = ""
 if "generated_content" not in st.session_state:
     st.session_state.generated_content = {}
 if "selected_keyword" not in st.session_state:
@@ -116,7 +118,18 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
 st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
 
 st.sidebar.header("🔑 설정 및 시그널")
-api_key = st.sidebar.text_input("AI Prime Tech API Key", type="password")
+
+# [💡 핵심 수정] 입력 상자가 세션 상태에 저장된 값을 기본값(value)으로 바라보게 세팅
+api_key = st.sidebar.text_input(
+    "AI Prime Tech API Key", 
+    value=st.session_state.api_key_storage, 
+    type="password"
+)
+
+# 입력값이 변경되면 즉시 세션 보관소에 업데이트
+if api_key != st.session_state.api_key_storage:
+    st.session_state.api_key_storage = api_key
+
 model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6"])
 
 st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기](https://signal.bz/)")
@@ -186,7 +199,7 @@ with tab1:
 
     st.write("") 
 
-    # 1단계: 글 생성하기 버튼
+    # 글 생성하기 버튼
     if st.button("🚀 블로그 글 생성하기", type="primary"):
         if not api_key:
             st.error("API 키를 입력하세요.")
@@ -219,7 +232,6 @@ with tab1:
                 elif p == "워드프레스":
                     platform_instruction = "- 글 맨 처음에 '요약(Snippet)' 문단을 한 줄로 명확하게 넣어 가독성을 높이세요.\n- 소제목 구분을 완벽히 하고 문장을 간결하게 작성하세요."
 
-                # [🔥 프롬프트 대폭 전면 수정: 이미지/링크 완전 제외 + 스마트블록 타겟 태그 20개 규칙 주입]
                 sys_prompt = (
                     f"당신은 네이버의 스마트블록(C-Rank, DIA+) 알고리즘을 꿰뚫고 있는 실시간 트렌드 전문 파워블로거입니다. "
                     f"입력된 키워드와 뉴스 데이터를 분석하여 완벽한 상위 노출용 포스팅을 작성하세요.\n\n"
