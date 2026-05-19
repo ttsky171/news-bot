@@ -43,8 +43,8 @@ def load_extension_data():
     import json
     
     # 🚨 [여기만 형의 정보로 수정!] 방금 만든 우체통 주소와 비밀번호 입력
-    BIN_ID = 6a0c24886610dd3ae86c19cd
-    MASTER_KEY = $2a$10$XJlSzhQ1AoOvMQqIH95KOeLDbr7ohp4ocKXh2V3iAJxHW.QvAnOm6
+    BIN_ID = "6a0c24886610dd3ae86c19cd"
+    MASTER_KEY = "$2a$10$XJlSzhQ1AoOvMQqIH95KOeLDbr7ohp4ocKXh2V3iAJxHW.QvAnOm6"
 
     
     try:
