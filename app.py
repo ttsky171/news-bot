@@ -50,19 +50,12 @@ def save_to_history(keyword, platform, content):
     with open(filename, "w", encoding="utf-8") as f: 
         f.write(content)
 
-# 🚨 [강력 보안 버전] 한글, 숫자, 영문, 기본 부호, # 외의 모든 외국어 문자를 완벽 청소하는 함수
+# 외국어 및 한자 오염 방지 화이트리스트 필터 함수
 def clean_foreign_languages(text):
     if not text:
         return text
-    
-    # 한글(가-힣), 영문(a-zA-Z), 숫자(0-9), 해시태그(#), 줄바꿈(\n), 공백(\s), 기본 문장부호 및 인용구만 허용
-    # 한자, 일어(가타카나/히라가나), 기타 알 수 없는 아시아권 문자 찌꺼기를 원천 차단합니다.
     allowed_pattern = re.compile(r'[^가-힣a-zA-Z0-9#\s\n.,?!~\"\'\(\)\[\]\-\_\·\’\‘\“\”\…]')
-    
-    # 허용되지 않은 문자(외국어 등)를 발견하면 공백으로 지워버립니다.
     cleaned_text = allowed_pattern.sub('', text)
-    
-    # 문장 가독성을 해치는 이중 공백 정리
     cleaned_text = re.sub(r' +', ' ', cleaned_text)
     return cleaned_text
 
@@ -101,7 +94,7 @@ def load_extension_data():
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
-# 2. AI 호출 엔진
+# 2. AI 호출 엔진 (데이터 탐색 로직 대폭 강화)
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -118,42 +111,50 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         data = res.read().decode("utf-8")
         conn.close()
         
+        # 만약 응답 데이터 자체가 비어있다면 즉시 반환
+        if not data or data.strip() == "":
+            return "API 서버로부터 아무런 데이터도 응답받지 못했습니다. (빈 응답)"
+
         raw_text = ""
         try:
             result_json = json.loads(data)
         except Exception:
-            if data.strip():
-                raw_text = data
+            # JSON 형태가 아닐 경우 서버가 보낸 텍스트 원본을 그대로 반환하여 에러 확인 유도
+            return f"JSON 파싱 실패. 서버 원본 메시지:\n{data}"
         
-        if not raw_text:
-            if "content" in result_json:
-                content_data = result_json["content"]
-                if isinstance(content_data, list) and len(content_data) > 0:
-                    if isinstance(content_data[0], dict) and "text" in content_data[0]:
-                        raw_text = content_data[0]["text"]
-                    elif isinstance(content_data[0], str):
-                        raw_text = content_data[0]
-                elif isinstance(content_data, str):
-                    raw_text = content_data
-            
-            elif "choices" in result_json and len(result_json["choices"]) > 0:
-                choice = result_json["choices"][0]
-                if "message" in choice and "content" in choice["message"]:
-                    raw_text = choice["message"]["content"]
-                elif "text" in choice:
-                    raw_text = choice["text"]
-                    
-            elif "text" in result_json:
-                raw_text = result_json["text"]
+        # [구조 체킹 1] Anthropic 스타일 (content 리스트 내의 text 구조)
+        if "content" in result_json:
+            content_data = result_json["content"]
+            if isinstance(content_data, list) and len(content_data) > 0:
+                if isinstance(content_data[0], dict) and "text" in content_data[0]:
+                    raw_text = content_data[0]["text"]
+                elif isinstance(content_data[0], str):
+                    raw_text = content_data[0]
+            elif isinstance(content_data, str):
+                raw_text = content_data
+        
+        # [구조 체킹 2] OpenAI 스타일 (choices 리스트 구조)
+        if not raw_text and "choices" in result_json and len(result_json["choices"]) > 0:
+            choice = result_json["choices"][0]
+            if "message" in choice and "content" in choice["message"]:
+                raw_text = choice["message"]["content"]
+            elif "text" in choice:
+                raw_text = choice["text"]
                 
-            elif "error" in result_json:
-                return f"AI API 에러 발생: {result_json['error']}"
+        # [구조 체킹 3] 직렬화된 단일 text 필드 구조
+        if not raw_text and "text" in result_json:
+            raw_text = result_json["text"]
+            
+        # [구조 체킹 4] 에러 메세지가 포함된 구조인지 확인
+        if "error" in result_json:
+            return f"AI API 내부 에러 발생: {result_json['error']}"
         
-        if raw_text.strip():
-            # 🚨 어떤 오염 찌꺼기가 남든 화면에 표출하기 직전 완벽하게 정제합니다.
+        # 최종 추출된 텍스트가 확인되면 화이트리스트 정제 후 반환
+        if raw_text and raw_text.strip() != "":
             return clean_foreign_languages(raw_text)
             
-        return "본문 텍스트가 비어있습니다."
+        # 모든 필드를 탐색했음에도 본문이 없을 경우, 수신한 JSON 데이터 전체를 날것으로 출력
+        return f"본문 텍스트 추출 실패. 서버 수신 응답 데이터 원본:\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
         
     except Exception as e:
         return f"통신 장애 발생: {str(e)}"
@@ -173,7 +174,6 @@ if api_key != st.session_state.api_key_storage:
     st.session_state.api_key_storage = api_key
     save_api_key(api_key)
 
-# 💡 팁: 'claude-sonnet-4-6'에서 다국어 깨짐 현상이 유독 잦다면 'claude-opus-4-6'로 변경하여 테스트해보는 것도 좋은 방법입니다.
 model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6"])
 
 st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기](https://signal.bz/)")
@@ -270,7 +270,7 @@ with tab1:
                 elif p == "티스토리":
                     platform_instruction = "- 핵심 키워드가 잘 드러나는 제목을 상단에 깔끔하게 배치하세요."
                 elif p == "워드프레스":
-                    platform_instruction = "- 문장을 질질 끌지 말고 간결하고 깔끔하게 마침표로 딱 끊어지도록 마무리지으세요."
+                    platform_instruction = "- 문장을 간결하고 깔끔하게 마침표로 딱 끊어지도록 마무리지으세요."
 
                 sys_prompt = (
                     f"당신은 검색 알고리즘 최적화를 완벽히 마스터한 블로그 포스팅 전문가입니다. "
@@ -295,19 +295,18 @@ with tab1:
                     f"위 지침을 토대로 글을 작성해줘. 절대로 문장 중간에 불필요한 한자나 중국어, 일본어 문법 찌꺼기가 섞여 나오지 않도록 텍스트 품질을 엄격하게 관리해줘."
                 )
                 
-                with st.spinner(f"[{p}] 글을 생성하고 정밀 화이트리스트 필터로 정제하는 중..."):
+                with st.spinner(f"[{p}] 글을 생성하고 유효성을 점검하는 중..."):
                     content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
-                    if "통신 장애 발생" not in content and "AI API 에러" not in content:
-                        st.session_state.generated_content[p] = content
+                    st.session_state.generated_content[p] = content
+                    
+                    # 에러나 원본 수신 데이터가 아닌 정상 글일 때만 히스토리에 저장
+                    if "추출 실패" not in content and "에러 발생" not in content and "통신 장애" not in content:
                         save_to_history(final_query, p, content)
-                    else:
-                        st.error(f"[{p}] 생성 오류: {content}")
 
     if st.session_state.generated_content:
-        st.success("🎉 화이트리스트 정제 및 블로그 글 생성이 완료되었습니다!")
         for p, full_content in st.session_state.generated_content.items():
-            st.subheader(f"✨ {p} 결과물")
-            st.text_area("📋 제목 + 본문 + 최적화 태그 (통째로 복사해서 사용하세요)", value=full_content, height=650, key=f"body_area_{p}")
+            st.subheader(f"✨ {p} 결과 안내")
+            st.text_area("📋 출력 창", value=full_content, height=650, key=f"body_area_{p}")
             st.divider()
 
 # --- 탭 2: 전체 히스토리 보관함 ---
