@@ -54,6 +54,7 @@ def save_to_history(keyword, platform, content):
 def clean_foreign_languages(text):
     if not text:
         return text
+    # 한글(가-힣), 영문(a-zA-Z), 숫자(0-9), 해시태그(#), 줄바꿈(\n), 공백(\s), 기본 문장부호만 허용
     allowed_pattern = re.compile(r'[^가-힣a-zA-Z0-9#\s\n.,?!~\"\'\(\)\[\]\-\_\·\’\‘\“\”\…]')
     cleaned_text = allowed_pattern.sub('', text)
     cleaned_text = re.sub(r' +', ' ', cleaned_text)
@@ -94,7 +95,7 @@ def load_extension_data():
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
-# 2. AI 호출 엔진 (데이터 탐색 로직 대폭 강화)
+# 2. AI 호출 엔진 (전달받은 복합 데이터 완벽 파싱 버전)
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -111,29 +112,36 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         data = res.read().decode("utf-8")
         conn.close()
         
-        # 만약 응답 데이터 자체가 비어있다면 즉시 반환
         if not data or data.strip() == "":
             return "API 서버로부터 아무런 데이터도 응답받지 못했습니다. (빈 응답)"
 
-        raw_text = ""
         try:
             result_json = json.loads(data)
         except Exception:
-            # JSON 형태가 아닐 경우 서버가 보낸 텍스트 원본을 그대로 반환하여 에러 확인 유도
             return f"JSON 파싱 실패. 서버 원본 메시지:\n{data}"
         
-        # [구조 체킹 1] Anthropic 스타일 (content 리스트 내의 text 구조)
-        if "content" in result_json:
-            content_data = result_json["content"]
-            if isinstance(content_data, list) and len(content_data) > 0:
-                if isinstance(content_data[0], dict) and "text" in content_data[0]:
-                    raw_text = content_data[0]["text"]
-                elif isinstance(content_data[0], str):
-                    raw_text = content_data[0]
-            elif isinstance(content_data, str):
-                raw_text = content_data
+        raw_text = ""
         
-        # [구조 체킹 2] OpenAI 스타일 (choices 리스트 구조)
+        # 🎯 [핵심] content 배열 내부에 thinking과 text가 나뉘어 들어오는 구조를 완벽하게 파싱
+        if "content" in result_json and isinstance(result_json["content"], list):
+            text_pieces = []
+            for item in result_json["content"]:
+                if isinstance(item, dict):
+                    # type이 text인 진짜 본문만 수집
+                    if item.get("type") == "text" and "text" in item:
+                        text_pieces.append(item["text"])
+                    # 혹시 모를 예외 구조 대비
+                    elif "text" in item and item.get("type") != "thinking":
+                        text_pieces.append(item["text"])
+            
+            if text_pieces:
+                raw_text = "".join(text_pieces)
+        
+        # [백업 구조 1] content가 일반 문자열로 들어오는 경우
+        if not raw_text and "content" in result_json and isinstance(result_json["content"], str):
+            raw_text = result_json["content"]
+        
+        # [백업 구조 2] OpenAI 스타일 규격 (choices)으로 들어오는 경우
         if not raw_text and "choices" in result_json and len(result_json["choices"]) > 0:
             choice = result_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -141,19 +149,25 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
             elif "text" in choice:
                 raw_text = choice["text"]
                 
-        # [구조 체킹 3] 직렬화된 단일 text 필드 구조
+        # [백업 구조 3] 루트 레벨에 바로 text가 포함되어 오는 경우
         if not raw_text and "text" in result_json:
             raw_text = result_json["text"]
             
-        # [구조 체킹 4] 에러 메세지가 포함된 구조인지 확인
+        # 에러 블록 처리
         if "error" in result_json:
             return f"AI API 내부 에러 발생: {result_json['error']}"
         
-        # 최종 추출된 텍스트가 확인되면 화이트리스트 정제 후 반환
+        # 최종 본문 텍스트 청소 및 다듬기
         if raw_text and raw_text.strip() != "":
-            return clean_foreign_languages(raw_text)
+            # 1차 허용 문자 필터링
+            cleaned = clean_foreign_languages(raw_text)
             
-        # 모든 필드를 탐색했음에도 본문이 없을 경우, 수신한 JSON 데이터 전체를 날것으로 출력
+            # 2차: 문장 내부에 강제로 끼어든 알파벳 찌꺼기 단어 완전 제거 (예: 고confortable 했던 -> 했던)
+            cleaned = re.sub(r'[a-zA-Z가-힣]*[a-zA-Z\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+[a-zA-Z가-힣]*', '', cleaned)
+            cleaned = re.sub(r' +', ' ', cleaned)  # 중복 공백 청소
+            
+            return cleaned.strip()
+            
         return f"본문 텍스트 추출 실패. 서버 수신 응답 데이터 원본:\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
         
     except Exception as e:
@@ -299,7 +313,6 @@ with tab1:
                     content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
                     st.session_state.generated_content[p] = content
                     
-                    # 에러나 원본 수신 데이터가 아닌 정상 글일 때만 히스토리에 저장
                     if "추출 실패" not in content and "에러 발생" not in content and "통신 장애" not in content:
                         save_to_history(final_query, p, content)
 
