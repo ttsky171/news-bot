@@ -50,15 +50,22 @@ def save_to_history(keyword, platform, content):
     with open(filename, "w", encoding="utf-8") as f: 
         f.write(content)
 
-# 외국어 및 한자 오염 방지 화이트리스트 필터 함수
-def clean_foreign_languages(text):
+# 🛠️ 수정한 정제 필터: 핵심 영어는 살리고 깨진 조사/찌꺼기만 골라 지우기
+def clean_broken_artifacts(text):
     if not text:
         return text
-    # 한글(가-힣), 영문(a-zA-Z), 숫자(0-9), 해시태그(#), 줄바꿈(\n), 공백(\s), 기본 문장부호만 허용
-    allowed_pattern = re.compile(r'[^가-힣a-zA-Z0-9#\s\n.,?!~\"\'\(\)\[\]\-\_\·\’\‘\“\”\…]')
-    cleaned_text = allowed_pattern.sub('', text)
-    cleaned_text = re.sub(r' +', ' ', cleaned_text)
-    return cleaned_text
+    
+    # 1. 한자, 일어(히라가나/가타카나) 계열만 원천 삭제 (영어는 건드리지 않음)
+    text = re.sub(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+', '', text)
+    
+    # 2. 한글 조사 뒤나 단어 중간에 기괴하게 꼬인 영문 찌꺼기만 정밀 조준 사격
+    # 예: 고confortable -> 고 / 했던chunks -> 했던
+    text = re.sub(r'([가-힣]+)[a-zA-Z]{3,}(?=[가-힣\s.,?!]|$)', r'\1', text)
+    text = re.sub(r'\b[a-zA-Z]{3,}([가-힣]+)', r'\1', text)
+    
+    # 3. 불필요한 더블 공백 청소
+    text = re.sub(r' +', ' ', text)
+    return text
 
 # 1. JSONBin 및 시그널 데이터 로드
 def load_extension_data():
@@ -95,7 +102,7 @@ def load_extension_data():
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
 
-# 2. AI 호출 엔진 (전달받은 복합 데이터 완벽 파싱 버전)
+# 2. AI 호출 엔진
 def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
     host = "aiprimetech.io"
     payload = json.dumps({
@@ -122,26 +129,22 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
         
         raw_text = ""
         
-        # 🎯 [핵심] content 배열 내부에 thinking과 text가 나뉘어 들어오는 구조를 완벽하게 파싱
+        # content 배열 내부 파싱 (thinking 제외, text 본문 수집)
         if "content" in result_json and isinstance(result_json["content"], list):
             text_pieces = []
             for item in result_json["content"]:
                 if isinstance(item, dict):
-                    # type이 text인 진짜 본문만 수집
                     if item.get("type") == "text" and "text" in item:
                         text_pieces.append(item["text"])
-                    # 혹시 모를 예외 구조 대비
                     elif "text" in item and item.get("type") != "thinking":
                         text_pieces.append(item["text"])
             
             if text_pieces:
                 raw_text = "".join(text_pieces)
         
-        # [백업 구조 1] content가 일반 문자열로 들어오는 경우
         if not raw_text and "content" in result_json and isinstance(result_json["content"], str):
             raw_text = result_json["content"]
         
-        # [백업 구조 2] OpenAI 스타일 규격 (choices)으로 들어오는 경우
         if not raw_text and "choices" in result_json and len(result_json["choices"]) > 0:
             choice = result_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -149,24 +152,15 @@ def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
             elif "text" in choice:
                 raw_text = choice["text"]
                 
-        # [백업 구조 3] 루트 레벨에 바로 text가 포함되어 오는 경우
         if not raw_text and "text" in result_json:
             raw_text = result_json["text"]
             
-        # 에러 블록 처리
         if "error" in result_json:
             return f"AI API 내부 에러 발생: {result_json['error']}"
         
-        # 최종 본문 텍스트 청소 및 다듬기
         if raw_text and raw_text.strip() != "":
-            # 1차 허용 문자 필터링
-            cleaned = clean_foreign_languages(raw_text)
-            
-            # 2차: 문장 내부에 강제로 끼어든 알파벳 찌꺼기 단어 완전 제거 (예: 고confortable 했던 -> 했던)
-            cleaned = re.sub(r'[a-zA-Z가-힣]*[a-zA-Z\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+[a-zA-Z가-힣]*', '', cleaned)
-            cleaned = re.sub(r' +', ' ', cleaned)  # 중복 공백 청소
-            
-            return cleaned.strip()
+            # 정교한 필터링 함수 통과 (고유 영어 단어는 보존)
+            return clean_broken_artifacts(raw_text).strip()
             
         return f"본문 텍스트 추출 실패. 서버 수신 응답 데이터 원본:\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
         
@@ -245,7 +239,7 @@ with tab1:
     if input_mode == "✍️ 직접 수동 입력":
         st.subheader("📝 뉴스 참고 내용 직접 입력")
         custom_summary = st.text_area(
-            "AI가 참고할 실시간 뉴스 내용이나 핵심 팩트를 적어주세요.", 
+            "AI가 참고할 실시간 뉴스 내용이나 핵심 팩트를 적어주세요. 상세히 적을수록 가짜 정보를 지어내지 않습니다.", 
             height=150
         )
     else:
@@ -289,14 +283,17 @@ with tab1:
                 sys_prompt = (
                     f"당신은 검색 알고리즘 최적화를 완벽히 마스터한 블로그 포스팅 전문가입니다. "
                     f"입력된 키워드와 뉴스를 바탕으로 한국인 독자가 가독성 높게 읽을 수 있는 매끄러운 글을 작성하세요.\n\n"
-                    f"🛑 [외국어 어휘 및 일어/중국어/한자 전면 사용 금지 지침]\n"
-                    f"- 문맥 도중에 한자, 일본어 단어, 조사, 중국어 번역투가 절대로 섞여 나오지 않도록 각별히 유의하세요.\n"
-                    f"- 모든 문장은 반드시 올바른 문법의 순수 '한국어' 표준 문장으로만 완성되어야 합니다.\n\n"
+                    f"⚠️ [소설 집필 및 가짜 정보 생성 절대 금지 지침]\n"
+                    f"- 제공된 '뉴스 맥락 정보'에 없는 사실을 억지로 꾸며내거나, 확인되지 않은 가짜 루머, 스펙, 일정을 진짜처럼 지어내어 서술하는 행위를 절대 엄금합니다.\n"
+                    f"- 분량을 늘려야 할 때는 팩트를 추가로 상상하는 대신, 이미 주어진 정보가 대중과 시장에 미칠 영향, 의의, 반응을 다각도로 깊게 풀어 해석하는 방식으로 분량을 채우세요.\n\n"
+                    f"🛑 [외국어 남용 및 일어/중국어/한자 전면 사용 금지 지침]\n"
+                    f"- 문맥 도중에 한자, 일본어 단어, 중국어 번역투가 절대로 섞여 나오지 않도록 하세요.\n"
+                    f"- 단, 핵심 브랜드명, 고유 대명사, 전문 IT 기술 용어 등의 필수적인 영어 표현(예: iPhone, SNS, AI 등)은 억지로 지우지 말고 정확하게 보존하여 작성하세요.\n\n"
                     f"❌ [마크다운 문법 및 강조 기호 사용 전면 금지]\n"
                     f"- 본문 어느 곳에도 '**', '###', '##', '*', '-', '◆', '■' 같은 마크다운 기호 및 특수문자를 절대 쓰지 마세요.\n"
                     f"- 문단을 구분하는 소제목은 아무런 기호 없이 평범한 텍스트나 숫자 넘버링 형태로만 적고, 줄바꿈을 넉넉히 하세요.\n\n"
                     f"🔢 [글자 수 규칙]\n"
-                    f"- 작성되는 순수 본문 분량은 무조건 {target_length} 이상이어야 합니다. 내용을 다양하고 구체적인 문장들로 채워 넣으세요.\n\n"
+                    f"- 작성되는 순수 본문 분량은 무조건 {target_length} 이상이어야 합니다. 주어진 팩트를 바탕으로 풍성하고 가치 있는 인사이트를 제공해 서술하세요.\n\n"
                     f"🏷️ [최적화 태그 생성 규칙]\n"
                     f"- 글 맨 마지막 단락에 블로그용 해시태그를 공백과 '#' 기호로만 조합하여 20개 이상 나열해 주세요.\n\n"
                     f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
@@ -306,7 +303,7 @@ with tab1:
                 user_msg = (
                     f"● 키워드: {final_query}\n"
                     f"● 뉴스 맥락 정보:\n{custom_summary}\n\n"
-                    f"위 지침을 토대로 글을 작성해줘. 절대로 문장 중간에 불필요한 한자나 중국어, 일본어 문법 찌꺼기가 섞여 나오지 않도록 텍스트 품질을 엄격하게 관리해줘."
+                    f"위 지침과 팩트를 바탕으로 글을 작성해줘. 절대로 확인되지 않은 팩트를 허구로 지어내지 말고, 본래 적혀야 할 핵심 영어 고유어는 그대로 유지하면서 문맥상 어색한 찌꺼기 텍스트만 깔끔하게 정제해줘."
                 )
                 
                 with st.spinner(f"[{p}] 글을 생성하고 유효성을 점검하는 중..."):
