@@ -1,334 +1,128 @@
 import streamlit as st
-import json
-import http.client
-import os
-import datetime
-import glob
-import urllib.request
-import re
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import time
+from datetime import datetime
 
-# 페이지 설정
-st.set_page_config(page_title="실시간 뉴스 블로그 생성기 Pro", page_icon="📰", layout="wide")
+# ==========================================
+# ⚙️ 사용자 설정 (실제 값으로 꼭 변경하세요)
+# ==========================================
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
 
-# 폴더 관리
-HISTORY_DIR = "blog_history"
-CONFIG_DIR = "blog_config"
-for folder in [HISTORY_DIR, CONFIG_DIR]:
-    if not os.path.exists(folder): 
-        os.makedirs(folder)
+# 네이버 연예/방송 뉴스 URL
+NAVER_ENT_URL = "https://news.naver.com/section/106" 
 
-# API 키 파일 저장/로드 함수
-KEY_FILE = os.path.join(CONFIG_DIR, "api_key.txt")
-
-def load_saved_api_key():
-    if os.path.exists(KEY_FILE):
-        try:
-            with open(KEY_FILE, "r", encoding="utf-8") as f:
-                return f.read().strip()
-        except:
-            return ""
-    return ""
-
-def save_api_key(key):
+# ==========================================
+# 📩 무조건 푸시 알림 발송 함수
+# ==========================================
+def send_push_notification(title, url):
+    """새로운 기사가 발견되면 조건 없이 즉시 텔레그램 푸시를 발송합니다."""
+    message = f"📢 [신규 연예 뉴스 등록!]\n\n제목: {title}\n링크: {url}"
+    telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message}
     try:
-        with open(KEY_FILE, "w", encoding="utf-8") as f:
-            f.write(key.strip())
-    except:
-        pass
-
-if "api_key_storage" not in st.session_state:
-    st.session_state.api_key_storage = load_saved_api_key()
-if "generated_content" not in st.session_state:
-    st.session_state.generated_content = {}
-if "selected_keyword" not in st.session_state:
-    st.session_state.selected_keyword = ""
-
-def save_to_history(keyword, platform, content):
-    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_keyword = "".join(c for c in keyword if c.isalnum() or c in (' ', '_', '-')).strip()
-    filename = f"{HISTORY_DIR}/{now}_{safe_keyword}_{platform}.txt"
-    with open(filename, "w", encoding="utf-8") as f: 
-        f.write(content)
-
-# 🛠️ 수정한 정제 필터: 핵심 영어는 살리고 깨진 조사/찌꺼기만 골라 지우기
-def clean_broken_artifacts(text):
-    if not text:
-        return text
-    
-    # 1. 한자, 일어(히라가나/가타카나) 계열만 원천 삭제 (영어는 건드리지 않음)
-    text = re.sub(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+', '', text)
-    
-    # 2. 한글 조사 뒤나 단어 중간에 기괴하게 꼬인 영문 찌꺼기만 정밀 조준 사격
-    # 예: 고confortable -> 고 / 했던chunks -> 했던
-    text = re.sub(r'([가-힣]+)[a-zA-Z]{3,}(?=[가-힣\s.,?!]|$)', r'\1', text)
-    text = re.sub(r'\b[a-zA-Z]{3,}([가-힣]+)', r'\1', text)
-    
-    # 3. 불필요한 더블 공백 청소
-    text = re.sub(r' +', ' ', text)
-    return text
-
-# 1. JSONBin 및 시그널 데이터 로드
-def load_extension_data():
-    fallback_keywords = ["아이폰18 출시일", "부동산 주택 정책 발표", "나는솔로 결혼 소식", "국내 주식 트렌드", "주말 날씨 전망"]
-    fallback_metadata = {k: f"{k} 관련 최신 트렌드 및 실시간 이슈 분석 뉴스입니다." for k in fallback_keywords}
-    
-    BIN_ID = "6a0c24886610dd3ae86c19cd"
-    MASTER_KEY = "$2a$10$XJlSzhQ1AoOvMQqIH95KOeLDbr7ohp4ocKXh2V3iAJxHW.QvAnOm6"
-    try:
-        url = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
-        req = urllib.request.Request(url, headers={"X-Master-Key": MASTER_KEY})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            actual = res_data.get("record", {})
-            kws = actual.get("keywords", [])
-            meta = actual.get("metadata", {})
-            if kws:
-                return kws, meta, actual.get("updated_at", "실시간 연동 완료")
-    except Exception:
-        pass
-
-    try:
-        signal_url = "https://api.signal.bz/news/realtime" 
-        req = urllib.request.Request(signal_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            signal_data = json.loads(response.read().decode("utf-8"))
-            kws = [item.get("keyword") for item in signal_data.get("top_keywords", []) if item.get("keyword")]
-            if kws:
-                meta = {k: f"실시간 시그널 트렌드 핫이슈 키워드 '{k}'에 대한 속보 및 대중 관심사 분석 정보입니다." for k in kws}
-                return kws, meta, "시그널 서버 직접 연동 시각: " + datetime.datetime.now().strftime("%H:%M:%S")
-    except Exception:
-        pass
-
-    now_str = datetime.datetime.now().strftime("%H:%M:%S")
-    return fallback_keywords, fallback_metadata, f"{now_str} (서버 점검으로 인한 자체 엔진 가동)"
-
-# 2. AI 호출 엔진
-def call_ai_prime_tech(key, sys_prompt, user_msg, model_name):
-    host = "aiprimetech.io"
-    payload = json.dumps({
-        "model": model_name,
-        "max_tokens": 4000, 
-        "messages": [{"role": "user", "content": f"[System 규칙: {sys_prompt}]\n\n{user_msg}"}]
-    })
-    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {key}'}
-    
-    try:
-        conn = http.client.HTTPSConnection(host, timeout=240) 
-        conn.request("POST", "/v1/messages", payload, headers)
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
-        conn.close()
-        
-        if not data or data.strip() == "":
-            return "API 서버로부터 아무런 데이터도 응답받지 못했습니다. (빈 응답)"
-
-        try:
-            result_json = json.loads(data)
-        except Exception:
-            return f"JSON 파싱 실패. 서버 원본 메시지:\n{data}"
-        
-        raw_text = ""
-        
-        # content 배열 내부 파싱 (thinking 제외, text 본문 수집)
-        if "content" in result_json and isinstance(result_json["content"], list):
-            text_pieces = []
-            for item in result_json["content"]:
-                if isinstance(item, dict):
-                    if item.get("type") == "text" and "text" in item:
-                        text_pieces.append(item["text"])
-                    elif "text" in item and item.get("type") != "thinking":
-                        text_pieces.append(item["text"])
-            
-            if text_pieces:
-                raw_text = "".join(text_pieces)
-        
-        if not raw_text and "content" in result_json and isinstance(result_json["content"], str):
-            raw_text = result_json["content"]
-        
-        if not raw_text and "choices" in result_json and len(result_json["choices"]) > 0:
-            choice = result_json["choices"][0]
-            if "message" in choice and "content" in choice["message"]:
-                raw_text = choice["message"]["content"]
-            elif "text" in choice:
-                raw_text = choice["text"]
-                
-        if not raw_text and "text" in result_json:
-            raw_text = result_json["text"]
-            
-        if "error" in result_json:
-            return f"AI API 내부 에러 발생: {result_json['error']}"
-        
-        if raw_text and raw_text.strip() != "":
-            # 정교한 필터링 함수 통과 (고유 영어 단어는 보존)
-            return clean_broken_artifacts(raw_text).strip()
-            
-        return f"본문 텍스트 추출 실패. 서버 수신 응답 데이터 원본:\n{json.dumps(result_json, ensure_ascii=False, indent=2)}"
-        
+        requests.post(telegram_url, json=payload, timeout=5)
     except Exception as e:
-        return f"통신 장애 발생: {str(e)}"
+        print(f"텔레그램 푸시 발송 실패: {e}")
 
-# 3. 화면 UI 및 사이드바 설정
-st.title("📰 실시간 이슈 뉴스 블로그 글 생성기")
+def fetch_naver_entertainment_news():
+    """네이버 연예 뉴스 최신 헤드라인을 가져옵니다."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        response = requests.get(NAVER_ENT_URL, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        articles = []
+        # 네이버 뉴스 다중 선택자 매칭
+        titles = soup.select(".sa_text_title") or soup.select(".sa_text a") or soup.select(".newsct_text_title")
+        
+        for item in titles:
+            title_text = item.get_text().strip()
+            link = item.get("href")
+            if title_text and link:
+                articles.append({
+                    "title": title_text, 
+                    "url": link, 
+                    "time": datetime.now().strftime("%H:%M:%S")
+                })
+        
+        # 중복 기사 제거 후 최신 15개 반환
+        return pd.DataFrame(articles).drop_duplicates(subset=["title"]).head(15)
+    except Exception as e:
+        st.error(f"데이터 크롤링 실패 (네이버 서버 응답 없음): {e}")
+        return pd.DataFrame(columns=["title", "url", "time"])
 
-st.sidebar.header("🔑 설정 및 시그널")
+# ==========================================
+# 🖥️ Streamlit 대시보드 UI
+# ==========================================
+st.set_page_config(page_title="실시간 뉴스 올패스 알림", page_icon="🚨", layout="wide")
 
-api_key = st.sidebar.text_input(
-    "AI Prime Tech API Key", 
-    value=st.session_state.api_key_storage, 
-    type="password"
-)
+st.title("🚨 실시간 연예 뉴스 올패스(All-Pass) 레이더")
+st.caption(f"현재 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 1분마다 신규 기사 전수 검사 중")
 
-if api_key != st.session_state.api_key_storage:
-    st.session_state.api_key_storage = api_key
-    save_api_key(api_key)
+st.sidebar.header("📡 레이더 가동 상태")
+st.sidebar.success("정상 작동 중: 연예 탭의 모든 신규 뉴스 감시 중")
+st.sidebar.warning("⚠️ 주의: 연예 뉴스는 등록 빈도가 매우 높아 폰 알림이 자주 울릴 수 있습니다.")
 
-model = st.sidebar.selectbox("모델 선택", ["claude-sonnet-4-6", "claude-opus-4-6"])
+# 기사 히스토리 관리를 위한 세션 초기화
+if "processed_news" not in st.session_state:
+    st.session_state.processed_news = set()
+if "last_new_articles" not in st.session_state:
+    st.session_state.last_new_articles = []
 
-st.sidebar.markdown("[🔗 시그널 실시간 트렌드 사이트 바로가기](https://signal.bz/)")
+# 크롤링 엔진 가동
+df = fetch_naver_entertainment_news()
 
-live_kws, live_metadata, last_update = load_extension_data()
-st.sidebar.info(f"🕒 데이터 연동 상태: {last_update}")
-
-input_mode = st.sidebar.radio("키워드 선택 방식", ["🔄 시그널 실시간 연동", "✍️ 직접 수동 입력"])
-
-if input_mode == "🔄 시그널 실시간 연동":
-    if not live_kws:
-        st.sidebar.warning("연동 대기 중입니다. 수동 입력을 이용해 주세요.")
-        final_query = ""
-    else:
-        final_query = st.sidebar.selectbox("작성할 키워드 선택", live_kws)
-else:
-    final_query = st.sidebar.text_input("✍️ 키워드 직접 입력", placeholder="예: 아이폰18 출시일")
-
-platforms = st.sidebar.multiselect("발행 플랫폼", ["네이버 블로그", "티스토리", "워드프레스"], default=["네이버 블로그"])
-
-style = st.sidebar.selectbox("글 스타일", [
-    "📰 뉴스 보도체 (객관적, 사실 중심)", 
-    "😊 쉬운 설명체 (친근함, 이모지 활용)",
-    "🔥 이슈 분석체 (전문가 관점, 비판적 분석)",
-    "✍️ 스토리텔링체 (부드러운 이야기 형식)"
-])
-
-length_option = st.sidebar.selectbox("목표 글자 수 (최소 보장 기준)", [
-    "공백 제외 최소 1,500자 이상", 
-    "공백 제외 최소 2,000자 이상", 
-    "공백 제외 최소 2,500자 이상"
-])
-
-st.sidebar.divider()
-
-st.sidebar.subheader("📂 과거 생성 기록 조회")
-history_files = glob.glob(f"{HISTORY_DIR}/*.txt")
-if history_files:
-    history_files.sort(key=os.path.getmtime, reverse=True)
-    file_names = [os.path.basename(f) for f in history_files]
-    selected_file = st.sidebar.selectbox("기록된 파일 선택", ["선택 안 함"] + file_names)
+if not df.empty:
+    current_titles = set(df["title"].tolist())
     
-    if selected_file != "선택 안 함":
-        with open(f"{HISTORY_DIR}/{selected_file}", "r", encoding="utf-8") as f:
-            history_content = f.read()
-        st.sidebar.text_area("📄 기록된 본문 내용", value=history_content, height=250)
-else:
-    st.sidebar.caption("생성된 히스토리 기록이 아직 없습니다.")
-
-
-# --- 메인 탭 구조 ---
-tab1, tab2 = st.tabs(["✨ 포스팅 생성기", "📂 전체 히스토리 보관함"])
-
-with tab1:
-    if input_mode == "✍️ 직접 수동 입력":
-        st.subheader("📝 뉴스 참고 내용 직접 입력")
-        custom_summary = st.text_area(
-            "AI가 참고할 실시간 뉴스 내용이나 핵심 팩트를 적어주세요. 상세히 적을수록 가짜 정보를 지어내지 않습니다.", 
-            height=150
-        )
+    # 처음 실행한 순간에는 현재 떠 있는 기사들을 기본 베이스라인으로 등록합니다.
+    # (프로그램을 켜자마자 기존 기사 15개가 한 번에 폰으로 쏟아지는 것을 방지)
+    if not st.session_state.processed_news:
+        st.session_state.processed_news = current_titles
+        new_articles_df = pd.DataFrame(columns=["title", "url", "time"])
+        st.info("⚡ 실시간 뉴스 레이더를 구축했습니다. 지금 이 순간 이후로 올라오는 모든 뉴스부터 즉시 푸시 알림이 발송됩니다.")
     else:
-        custom_summary = live_metadata.get(final_query, "최신 정보 없음")
-        st.info(f"📋 **현재 선택된 시그널 팩트 요약본:**\n{custom_summary}")
+        # 1. 1분 전 스캔 결과와 대조하여 완전히 새로운 기사만 추출
+        new_articles_df = df[~df["title"].isin(st.session_state.processed_news)]
+        # 신규 기사들을 히스토리에 누적 업데이트
+        st.session_state.processed_news.update(new_articles_df["title"].tolist())
 
-    st.write("") 
+    # 새로운 기사가 발견되었다면 화면 상단 갱신용 세션에 저장
+    if not new_articles_df.empty:
+        st.session_state.last_new_articles = new_articles_df.to_dict('records')
 
-    if st.button("🚀 블로그 글 생성하기", type="primary"):
-        if not api_key:
-            st.error("API 키를 입력하세요.")
-        elif not final_query or final_query.strip() == "":
-            st.error("작성할 키워드를 선택하거나 직접 입력해 주세요.")
-        elif not platforms:
-            st.warning("발행 플랫폼을 최소 하나 이상 선택해주세요.")
-        else:
-            st.session_state.selected_keyword = final_query
-            st.session_state.generated_content = {} 
+    # 2. 대시보드 상단 강조 영역 (방금 폰으로 날아간 기사들)
+    if st.session_state.last_new_articles:
+        st.subheader("🔥 방금 스마트폰으로 발송된 신규 뉴스")
+        for row in st.session_state.last_new_articles:
+            st.markdown(f"""
+                <div style="background-color: #fffbe6; border-left: 6px solid #faad14; border-radius: 6px; padding: 16px; margin-bottom: 12px;">
+                    <span style="font-weight: bold; color: #d46b08; font-size: 0.9rem;">⚡ [실시간 푸시 완료]</span>
+                    <span style="color: #8c8c8c; font-size: 0.8rem; margin-left: 8px;">({row['time']})</span><br>
+                    <a href="{row['url']}" target="_blank" style="text-decoration: none; color: #1f1f1f; font-size: 1.15rem; font-weight: bold;">{row['title']}</a>
+                </div>
+            """, unsafe_allow_html=True)
             
-            target_length = length_option.split(" ")[3] + "자 이상"
+            # 중복 전송을 막기 위해 이번에 새로 긁어온 데이터프레임에 존재할 때만 딱 한 번 푸시 발송
+            if not new_articles_df.empty and row["title"] in new_articles_df["title"].values:
+                send_push_notification(row["title"], row["url"])
+        st.markdown("---")
 
-            for p in platforms:
-                tone_instruction = ""
-                if "뉴스 보도체" in style:
-                    tone_instruction = "신뢰감 있고 객관적인 신문 기사 어조 (~다, ~합니다)로 작성하세요."
-                elif "쉬운 설명체" in style:
-                    tone_instruction = "친근한 블로그 어조 (~에요, ~습니다)로 작성하고 알맞은 이모지를 섞으세요."
-                elif "이슈 분석체" in style:
-                    tone_instruction = "날카로운 전문 평론가 입장에서 깊이 있는 배경 분석과 전망을 서술하세요."
-                elif "스토리텔링체" in style:
-                    tone_instruction = "독자가 읽기 편안하도록 부드러운 호흡의 이야기 형식으로 서술하세요."
+    # 3. 네이버 뉴스 실시간 전체 스트림
+    st.subheader("📋 현재 네이버 뉴스 홈 스트림 (최신순)")
+    for idx, row in df.iterrows():
+        st.markdown(f"⏱️ `{row['time']}` | [{row['title']}]({row['url']})")
 
-                platform_instruction = ""
-                if p == "네이버 블로그":
-                    platform_instruction = "- 제목은 맨 위에 한 줄로 적고 바로 서론으로 자연스럽게 진입하세요.\n- 단락 사이에는 엔터를 2번 쳐서 가독성을 확보하세요."
-                elif p == "티스토리":
-                    platform_instruction = "- 핵심 키워드가 잘 드러나는 제목을 상단에 깔끔하게 배치하세요."
-                elif p == "워드프레스":
-                    platform_instruction = "- 문장을 간결하고 깔끔하게 마침표로 딱 끊어지도록 마무리지으세요."
+else:
+    st.warning("네이버 뉴스 데이터를 가져오지 못했습니다. 1분 후 다시 연결을 시도합니다.")
 
-                sys_prompt = (
-                    f"당신은 검색 알고리즘 최적화를 완벽히 마스터한 블로그 포스팅 전문가입니다. "
-                    f"입력된 키워드와 뉴스를 바탕으로 한국인 독자가 가독성 높게 읽을 수 있는 매끄러운 글을 작성하세요.\n\n"
-                    f"⚠️ [소설 집필 및 가짜 정보 생성 절대 금지 지침]\n"
-                    f"- 제공된 '뉴스 맥락 정보'에 없는 사실을 억지로 꾸며내거나, 확인되지 않은 가짜 루머, 스펙, 일정을 진짜처럼 지어내어 서술하는 행위를 절대 엄금합니다.\n"
-                    f"- 분량을 늘려야 할 때는 팩트를 추가로 상상하는 대신, 이미 주어진 정보가 대중과 시장에 미칠 영향, 의의, 반응을 다각도로 깊게 풀어 해석하는 방식으로 분량을 채우세요.\n\n"
-                    f"🛑 [외국어 남용 및 일어/중국어/한자 전면 사용 금지 지침]\n"
-                    f"- 문맥 도중에 한자, 일본어 단어, 중국어 번역투가 절대로 섞여 나오지 않도록 하세요.\n"
-                    f"- 단, 핵심 브랜드명, 고유 대명사, 전문 IT 기술 용어 등의 필수적인 영어 표현(예: iPhone, SNS, AI 등)은 억지로 지우지 말고 정확하게 보존하여 작성하세요.\n\n"
-                    f"❌ [마크다운 문법 및 강조 기호 사용 전면 금지]\n"
-                    f"- 본문 어느 곳에도 '**', '###', '##', '*', '-', '◆', '■' 같은 마크다운 기호 및 특수문자를 절대 쓰지 마세요.\n"
-                    f"- 문단을 구분하는 소제목은 아무런 기호 없이 평범한 텍스트나 숫자 넘버링 형태로만 적고, 줄바꿈을 넉넉히 하세요.\n\n"
-                    f"🔢 [글자 수 규칙]\n"
-                    f"- 작성되는 순수 본문 분량은 무조건 {target_length} 이상이어야 합니다. 주어진 팩트를 바탕으로 풍성하고 가치 있는 인사이트를 제공해 서술하세요.\n\n"
-                    f"🏷️ [최적화 태그 생성 규칙]\n"
-                    f"- 글 맨 마지막 단락에 블로그용 해시태그를 공백과 '#' 기호로만 조합하여 20개 이상 나열해 주세요.\n\n"
-                    f"[톤앤매너 규칙]\n{tone_instruction}\n\n"
-                    f"[플랫폼별 작성 규칙]\n{platform_instruction}"
-                )
-                
-                user_msg = (
-                    f"● 키워드: {final_query}\n"
-                    f"● 뉴스 맥락 정보:\n{custom_summary}\n\n"
-                    f"위 지침과 팩트를 바탕으로 글을 작성해줘. 절대로 확인되지 않은 팩트를 허구로 지어내지 말고, 본래 적혀야 할 핵심 영어 고유어는 그대로 유지하면서 문맥상 어색한 찌꺼기 텍스트만 깔끔하게 정제해줘."
-                )
-                
-                with st.spinner(f"[{p}] 글을 생성하고 유효성을 점검하는 중..."):
-                    content = call_ai_prime_tech(api_key, sys_prompt, user_msg, model)
-                    st.session_state.generated_content[p] = content
-                    
-                    if "추출 실패" not in content and "에러 발생" not in content and "통신 장애" not in content:
-                        save_to_history(final_query, p, content)
-
-    if st.session_state.generated_content:
-        for p, full_content in st.session_state.generated_content.items():
-            st.subheader(f"✨ {p} 결과 안내")
-            st.text_area("📋 출력 창", value=full_content, height=650, key=f"body_area_{p}")
-            st.divider()
-
-# --- 탭 2: 전체 히스토리 보관함 ---
-with tab2:
-    st.subheader("📚 과거에 생성된 모든 글 보관소")
-    all_files = glob.glob(f"{HISTORY_DIR}/*.txt")
-    if all_files:
-        all_files.sort(key=os.path.getmtime, reverse=True)
-        for f_path in all_files:
-            f_name = os.path.basename(f_path)
-            with st.expander(f"📄 {f_name}"):
-                with open(f_path, "r", encoding="utf-8") as f:
-                    st.text_area("내용", value=f.read(), height=300, key=f"tab2_{f_name}")
-    else:
-        st.info("저장된 과거 글 기록이 없습니다.")
+# ==========================================
+# ⏳ 1분(60초) 주기 자동 새로고침 무한 루프
+# ==========================================
+time.sleep(60)
+st.rerun()
